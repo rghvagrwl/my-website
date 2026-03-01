@@ -12,13 +12,13 @@
 # my-website
 # my-website
 
-## Spotify SDK (New Music page)
+## Spotify SDK (Music page)
 
-To use `/new-music`, add a `.env.local` file:
+To use `/music`, add a `.env.local` file:
 
 ```bash
 VITE_SPOTIFY_CLIENT_ID=your_spotify_app_client_id
-VITE_SPOTIFY_REDIRECT_URI=http://localhost:5173/new-music
+VITE_SPOTIFY_REDIRECT_URI=http://localhost:5173/music
 ```
 
 In your Spotify app dashboard, add the same redirect URI exactly.

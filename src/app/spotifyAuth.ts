@@ -29,7 +29,7 @@ function getClientId(): string {
 function getRedirectUri(): string {
   const configured = import.meta.env.VITE_SPOTIFY_REDIRECT_URI as string | undefined;
   if (configured && configured.trim().length > 0) return configured.trim();
-  return `${window.location.origin}/new-music`;
+  return `${window.location.origin}/music`;
 }
 
 function randomString(length: number): string {

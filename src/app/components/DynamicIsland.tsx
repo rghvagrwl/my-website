@@ -28,6 +28,10 @@ const SPRING = {
 const INTRO_DELAY_MS = 1000;
 const INTRO_SHIMMER_START_OFFSET_MS = 1400;
 const INTRO_SHIMMER_DURATION_MS = 1250;
+const SPOTIFY_PREMIUM_REQUIRED_ERROR = "Spotify premium required";
+const SPOTIFY_PREMIUM_REQUIRED_ALERT =
+  "Playback is unavailable without Spotify Premium";
+const FORCE_SHOW_PREMIUM_ALERT_ON_CONNECT_FOR_TESTING = true;
 
 type SpotifyPlaybackStatus =
   | "missing_config"
@@ -402,6 +406,12 @@ function createDriftKeyframes(seed: number) {
   return { x, y };
 }
 
+function isSpotifyPremiumRequiredMessage(message: string | null | undefined) {
+  if (!message) return false;
+  const normalized = message.toLowerCase();
+  return normalized.includes("premium") || normalized.includes("premium_required");
+}
+
 /* ── Main component ─────────────────────────────────────────────── */
 export default function DynamicIsland({
   spotifyEnabled = false,
@@ -415,8 +425,14 @@ export default function DynamicIsland({
   const [viewportWidth, setViewportWidth] = useState(() =>
     typeof window !== "undefined" ? window.innerWidth : 1200
   );
+  const [viewportHeight, setViewportHeight] = useState(() =>
+    typeof window !== "undefined" ? window.innerHeight : 900
+  );
   useEffect(() => {
-    const onResize = () => setViewportWidth(window.innerWidth);
+    const onResize = () => {
+      setViewportWidth(window.innerWidth);
+      setViewportHeight(window.innerHeight);
+    };
     window.addEventListener("resize", onResize, { passive: true });
     return () => window.removeEventListener("resize", onResize);
   }, []);
@@ -447,7 +463,15 @@ export default function DynamicIsland({
     x: 50,
     y: 50,
   });
-  const [spotifyErrorDismissed, setSpotifyErrorDismissed] = useState(false);
+  const [spotifyPremiumAlertDismissed, setSpotifyPremiumAlertDismissed] =
+    useState(false);
+  const [spotifyPremiumAlertTestVisible, setSpotifyPremiumAlertTestVisible] =
+    useState(false);
+  const [spotifyPremiumAlertHover, setSpotifyPremiumAlertHover] = useState({
+    active: false,
+    x: 50,
+    y: 50,
+  });
   const [artExpanded, setArtExpanded] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [isAutoFlippingCover, setIsAutoFlippingCover] = useState(false);
@@ -532,6 +556,7 @@ export default function DynamicIsland({
   const spotifyPlayInFlightRef = useRef(false);
   const queuedSpotifyTrackIndexRef = useRef<number | null>(null);
   const spotifyCtaHoverLeaveTimerRef = useRef<number | null>(null);
+  const spotifyPremiumAlertHoverLeaveTimerRef = useRef<number | null>(null);
   const spotifyActive = spotifyEnabled;
   const playlistTrackIdSet = useMemo(() => {
     const set = new Set<string>();
@@ -607,7 +632,9 @@ export default function DynamicIsland({
   }, []);
 
   useEffect(() => {
-    setSpotifyErrorDismissed(false);
+    if (isSpotifyPremiumRequiredMessage(spotifyError)) {
+      setSpotifyPremiumAlertDismissed(false);
+    }
   }, [spotifyError]);
 
   useEffect(() => {
@@ -739,24 +766,29 @@ export default function DynamicIsland({
         window.clearTimeout(spotifyCtaHoverLeaveTimerRef.current);
         spotifyCtaHoverLeaveTimerRef.current = null;
       }
+      if (spotifyPremiumAlertHoverLeaveTimerRef.current !== null) {
+        window.clearTimeout(spotifyPremiumAlertHoverLeaveTimerRef.current);
+        spotifyPremiumAlertHoverLeaveTimerRef.current = null;
+      }
     };
   }, []);
 
   useEffect(() => {
     if (!spotifyActive || spotifyBootedRef.current) return;
+    spotifyBootedRef.current = true;
     const url = new URL(window.location.href);
     const hasAuthParams =
       url.searchParams.has("code") || url.searchParams.has("error");
-    if (!hasAuthParams) return;
-    spotifyBootedRef.current = true;
 
     (async () => {
-      try {
-        await completeSpotifyAuthFromUrl();
-      } catch (error) {
-        setSpotifyStatus("error");
-        setSpotifyError((error as Error).message);
-        return;
+      if (hasAuthParams) {
+        try {
+          await completeSpotifyAuthFromUrl();
+        } catch (error) {
+          setSpotifyStatus("error");
+          setSpotifyError((error as Error).message);
+          return;
+        }
       }
 
       const token = await getValidSpotifyAccessToken();
@@ -1003,6 +1035,9 @@ export default function DynamicIsland({
         if (response.status === 404 && text.includes("Device not found")) {
           throw new Error("Spotify device unavailable");
         }
+        if (response.status === 403 && isSpotifyPremiumRequiredMessage(text)) {
+          throw new Error(SPOTIFY_PREMIUM_REQUIRED_ERROR);
+        }
         throw new Error(`Spotify API ${response.status}`);
       }
     },
@@ -1148,6 +1183,11 @@ export default function DynamicIsland({
               played = true;
             } catch (error) {
               const message = (error as Error).message;
+              if (message === SPOTIFY_PREMIUM_REQUIRED_ERROR) {
+                setSpotifyStatus("error");
+                setSpotifyError(SPOTIFY_PREMIUM_REQUIRED_ERROR);
+                break;
+              }
               if (message === "Spotify device unavailable" && activeDeviceId) {
                 if (unavailableRetries >= 3) {
                   setSpotifyStatus("disconnected");
@@ -1217,6 +1257,11 @@ export default function DynamicIsland({
         }
       } catch (error) {
         const message = (error as Error).message;
+        if (message === SPOTIFY_PREMIUM_REQUIRED_ERROR) {
+          setSpotifyStatus("error");
+          setSpotifyError(SPOTIFY_PREMIUM_REQUIRED_ERROR);
+          return;
+        }
         if (message === "Spotify device unavailable") {
           setSpotifyStatus("disconnected");
           setSpotifyDeviceId(null);
@@ -1248,6 +1293,10 @@ export default function DynamicIsland({
       setSpotifyError("Add VITE_SPOTIFY_CLIENT_ID and VITE_SPOTIFY_REDIRECT_URI in .env.local");
       return;
     }
+    if (FORCE_SHOW_PREMIUM_ALERT_ON_CONNECT_FOR_TESTING) {
+      setSpotifyPremiumAlertTestVisible(true);
+      setSpotifyPremiumAlertDismissed(false);
+    }
 
     try {
       if (spotifyPlayerRef.current) {
@@ -1255,7 +1304,7 @@ export default function DynamicIsland({
         spotifyPlayerRef.current = null;
       }
       setSpotifyError(null);
-      setSpotifyErrorDismissed(false);
+      setSpotifyPremiumAlertDismissed(false);
       setSpotifyDeviceId(null);
       setCurrentSpotifyTrackId(null);
       setSpotifyDurationSec(0);
@@ -1319,10 +1368,18 @@ export default function DynamicIsland({
       });
       player.addListener("account_error", ({ message }: { message: string }) => {
         setSpotifyStatus("error");
+        if (isSpotifyPremiumRequiredMessage(message)) {
+          setSpotifyError(SPOTIFY_PREMIUM_REQUIRED_ERROR);
+          return;
+        }
         setSpotifyError(message);
       });
       player.addListener("playback_error", ({ message }: { message: string }) => {
         setSpotifyStatus("error");
+        if (isSpotifyPremiumRequiredMessage(message)) {
+          setSpotifyError(SPOTIFY_PREMIUM_REQUIRED_ERROR);
+          return;
+        }
         setSpotifyError(message);
       });
       player.addListener("player_state_changed", (state: any) => {
@@ -1527,6 +1584,7 @@ export default function DynamicIsland({
     setSpotifyDurationSec(0);
     setSpotifyStatus("disconnected");
     setSpotifyError(null);
+    setSpotifyPremiumAlertTestVisible(false);
     setIsPlaying(false);
   }, []);
 
@@ -1584,6 +1642,7 @@ export default function DynamicIsland({
     artExpanded ||
     isHoveringPlaybackControls ||
     (spotifyEnabled && spotifyStatus !== "ready");
+  const showSpotifyConnectCta = spotifyEnabled && spotifyStatus !== "ready";
   const spotifyCtaLabel = "Play with Spotify Premium";
   const spotifyCtaBusy = spotifyStatus === "connecting";
   const shouldObscureSpotifyTime = spotifyEnabled && spotifyStatus !== "ready";
@@ -1593,6 +1652,10 @@ export default function DynamicIsland({
     : formatTime(activeDurationSec);
   const playerWidth = Math.max(264, Math.min(332, viewportWidth - 48));
   const albumSize = Math.max(236, Math.min(320, playerWidth - 12));
+  const playerIntroStartOffset = Math.max(420, Math.floor(viewportHeight * 0.68));
+  const showSpotifyPremiumAlert =
+    (FORCE_SHOW_PREMIUM_ALERT_ON_CONNECT_FOR_TESTING && spotifyPremiumAlertTestVisible) ||
+    isSpotifyPremiumRequiredMessage(spotifyError);
   const sliderStretch = isDragging
     ? {
         widthOffset: Math.abs(dragOverscroll) * 30,
@@ -1600,10 +1663,126 @@ export default function DynamicIsland({
         height: 10 - Math.abs(dragOverscroll) * 6,
       }
     : { widthOffset: 0, xOffset: 0, height: 6 };
+  const spotifyConnectCta = showSpotifyConnectCta ? (
+    <motion.button
+      type="button"
+      className="relative inline-flex cursor-pointer items-center gap-[2px] overflow-hidden whitespace-nowrap rounded-full bg-[rgba(40,40,40,0.45)] px-[8px] py-[3px] text-[14px] text-white/90"
+      aria-busy={spotifyCtaBusy}
+      disabled={spotifyCtaBusy}
+      animate={{
+        scaleX: spotifyStatus === "connecting" ? 0.88 : 1,
+      }}
+      transition={{
+        scaleX: { duration: 0.34, ease: [0.22, 0.8, 0.26, 1] },
+      }}
+      style={{
+        background: "rgba(40,40,40,0.45)",
+        backdropFilter: "blur(40px) saturate(1.8)",
+        WebkitBackdropFilter: "blur(40px) saturate(1.8)",
+        border: "1px solid rgba(255,255,255,0.12)",
+        boxShadow:
+          "0 8px 24px rgba(0,0,0,0.22), inset 0 0.5px 0 rgba(255,255,255,0.1)",
+        cursor: spotifyCtaBusy ? "default" : "pointer",
+        opacity: spotifyCtaBusy ? 0.9 : 1,
+      }}
+      onMouseEnter={() => {
+        if (spotifyCtaHoverLeaveTimerRef.current !== null) {
+          window.clearTimeout(spotifyCtaHoverLeaveTimerRef.current);
+          spotifyCtaHoverLeaveTimerRef.current = null;
+        }
+        setSpotifyCtaHover((prev) => ({ ...prev, active: true }));
+      }}
+      onMouseLeave={() => {
+        if (spotifyCtaHoverLeaveTimerRef.current !== null) {
+          window.clearTimeout(spotifyCtaHoverLeaveTimerRef.current);
+        }
+        spotifyCtaHoverLeaveTimerRef.current = window.setTimeout(() => {
+          setSpotifyCtaHover((prev) => ({ ...prev, active: false }));
+          spotifyCtaHoverLeaveTimerRef.current = null;
+        }, 140);
+      }}
+      onMouseMove={(e) => {
+        const rect = e.currentTarget.getBoundingClientRect();
+        const nx = (e.clientX - rect.left) / rect.width;
+        const ny = (e.clientY - rect.top) / rect.height;
+        const clampedX = Math.max(0, Math.min(1, nx));
+        const clampedY = Math.max(0, Math.min(1, ny));
+        setSpotifyCtaHover({
+          active: true,
+          x: clampedX * 100,
+          y: clampedY * 100,
+        });
+      }}
+      onClick={() => {
+        if (spotifyStatus === "connecting") return;
+        if (!hasSpotifyConfig()) {
+          setSpotifyStatus("missing_config");
+          setSpotifyError(
+            "Add VITE_SPOTIFY_CLIENT_ID and VITE_SPOTIFY_REDIRECT_URI in .env.local"
+          );
+          return;
+        }
+        void (async () => {
+          const token = await getValidSpotifyAccessToken();
+          if (token) {
+            await connectSpotifyPlayer(true);
+            return;
+          }
+          await startSpotifyLogin();
+        })();
+      }}
+    >
+      <motion.div
+        className="pointer-events-none absolute inset-0"
+        animate={{ opacity: spotifyCtaHover.active ? 0.92 : 0 }}
+        transition={{ duration: 0.3, ease: [0.32, 0.72, 0, 1] }}
+        style={{
+          background: `radial-gradient(120px 72px at ${spotifyCtaHover.x}% ${spotifyCtaHover.y}%, rgba(255,255,255,0.42), rgba(255,255,255,0.12) 46%, rgba(255,255,255,0) 78%)`,
+          filter: "blur(5px) saturate(1.04)",
+        }}
+      />
+      {spotifyCtaPulseId > 0 && (
+        <motion.div
+          key={`cta-sync-${spotifyCtaPulseId}`}
+          className="absolute inset-0 pointer-events-none"
+          initial={{ x: "-120%", opacity: 0 }}
+          animate={{ x: "120%", opacity: [0, 0.76, 0.24, 0] }}
+          transition={{
+            duration: 0.86,
+            ease: [0.25, 0.85, 0.25, 1],
+          }}
+          style={{
+            background:
+              "linear-gradient(100deg, rgba(255,255,255,0) 18%, rgba(255,255,255,0.58) 48%, rgba(255,255,255,0.2) 64%, rgba(255,255,255,0) 86%)",
+            mixBlendMode: "screen",
+            filter: "blur(6px)",
+          }}
+        />
+      )}
+      <SpotifyLogo
+        className="size-[17px]"
+        color="rgba(255,255,255,0.78)"
+      />
+      <motion.span
+        className="whitespace-nowrap"
+        animate={{
+          opacity: spotifyStatus === "connecting" ? 0 : 1,
+          y: spotifyStatus === "connecting" ? -2 : 0,
+          maxWidth: spotifyStatus === "connecting" ? 0 : 240,
+          marginLeft: spotifyStatus === "connecting" ? 0 : 2,
+          filter: spotifyStatus === "connecting" ? "blur(2px)" : "blur(0px)",
+        }}
+        transition={{ duration: 0.24, ease: [0.22, 0.8, 0.26, 1] }}
+        style={{ overflow: "hidden" }}
+      >
+        {spotifyCtaLabel}
+      </motion.span>
+    </motion.button>
+  ) : null;
 
   return (
     <div
-      className="flex items-end justify-center min-h-screen relative overflow-hidden pb-[48px] select-none"
+      className="relative flex h-full items-end justify-center overflow-hidden pb-[48px] select-none"
       style={{
         backgroundColor: artExpanded ? "#000" : "transparent",
         transition: "background-color 0.6s ease",
@@ -1611,6 +1790,7 @@ export default function DynamicIsland({
         WebkitUserSelect: "none",
         cursor: artExpanded ? "pointer" : "default",
         pointerEvents: "none",
+        paddingBottom: "calc(48px + env(safe-area-inset-bottom))",
       }}
     >
       {artExpanded && (
@@ -1700,7 +1880,7 @@ export default function DynamicIsland({
 
       <motion.div
         className="flex flex-col items-center relative z-10 pointer-events-auto"
-        initial={{ y: 180 }}
+        initial={{ y: playerIntroStartOffset }}
         animate={{ y: 0 }}
         transition={{
           y: {
@@ -1874,44 +2054,92 @@ export default function DynamicIsland({
           )}
         </AnimatePresence>
 
-        {spotifyActive && spotifyError && !spotifyErrorDismissed ? (
-          <div
-            className="mb-2 inline-flex max-w-[332px] items-center gap-[8px] rounded-full px-[10px] py-[5px] text-[12px] font-medium text-[rgba(255,132,132,0.96)]"
-            style={{
-              background:
-                "linear-gradient(135deg, rgba(255,82,82,0.12), rgba(255,82,82,0.05) 38%, rgba(40,40,40,0.45))",
-              backdropFilter: "blur(40px) saturate(1.8)",
-              WebkitBackdropFilter: "blur(40px) saturate(1.8)",
-              border: "1px solid rgba(255,132,132,0.24)",
-              boxShadow:
-                "0 8px 24px rgba(0,0,0,0.22), inset 0 0.5px 0 rgba(255,255,255,0.1)",
-              pointerEvents: "auto",
-            }}
-          >
-            <span className="truncate">{spotifyError}</span>
-            <button
-              type="button"
-              aria-label="Close alert"
-              className="relative inline-flex h-[14px] w-[14px] shrink-0 cursor-pointer items-center justify-center opacity-90 hover:opacity-100"
-              onClick={() => setSpotifyErrorDismissed(true)}
+        <AnimatePresence initial={false}>
+          {spotifyActive && showSpotifyPremiumAlert && !spotifyPremiumAlertDismissed ? (
+            <motion.div
+              className="relative z-20 mb-2 inline-flex max-w-[332px] cursor-pointer items-center gap-[8px] overflow-hidden rounded-full px-[10px] py-[6px] text-[12px] font-medium text-[rgba(255,208,98,0.98)]"
+              initial={{ opacity: 0, y: 8, scale: 0.97 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -6, scale: 0.98 }}
+              transition={{ duration: 0.2, ease: [0.22, 0.8, 0.26, 1] }}
+              style={{
+                backgroundColor: "rgba(40,40,40,0.45)",
+                backgroundImage:
+                  "linear-gradient(180deg, rgba(164,104,0,0.56) 0%, rgba(125,80,0,0.38) 52%, rgba(52,34,0,0.22) 100%)",
+                backdropFilter: "blur(40px) saturate(1.8)",
+                WebkitBackdropFilter: "blur(40px) saturate(1.8)",
+                border: "1px solid rgba(255,208,98,0.34)",
+                boxShadow:
+                  "0 8px 24px rgba(0,0,0,0.22), inset 0 0.5px 0 rgba(255,255,255,0.1), inset 0 0 30px rgba(176,118,0,0.34)",
+                pointerEvents: "auto",
+              }}
+              onMouseEnter={() => {
+                if (spotifyPremiumAlertHoverLeaveTimerRef.current !== null) {
+                  window.clearTimeout(spotifyPremiumAlertHoverLeaveTimerRef.current);
+                  spotifyPremiumAlertHoverLeaveTimerRef.current = null;
+                }
+                setSpotifyPremiumAlertHover((prev) => ({ ...prev, active: true }));
+              }}
+              onMouseLeave={() => {
+                if (spotifyPremiumAlertHoverLeaveTimerRef.current !== null) {
+                  window.clearTimeout(spotifyPremiumAlertHoverLeaveTimerRef.current);
+                }
+                spotifyPremiumAlertHoverLeaveTimerRef.current = window.setTimeout(() => {
+                  setSpotifyPremiumAlertHover((prev) => ({ ...prev, active: false }));
+                  spotifyPremiumAlertHoverLeaveTimerRef.current = null;
+                }, 140);
+              }}
+              onMouseMove={(e) => {
+                const rect = e.currentTarget.getBoundingClientRect();
+                const nx = (e.clientX - rect.left) / rect.width;
+                const ny = (e.clientY - rect.top) / rect.height;
+                const clampedX = Math.max(0, Math.min(1, nx));
+                const clampedY = Math.max(0, Math.min(1, ny));
+                setSpotifyPremiumAlertHover({
+                  active: true,
+                  x: clampedX * 100,
+                  y: clampedY * 100,
+                });
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                setSpotifyPremiumAlertDismissed(true);
+                setSpotifyPremiumAlertTestVisible(false);
+              }}
             >
-              <span
-                className="absolute h-[1.5px] w-[12px] rounded-full"
+              <motion.div
+                className="pointer-events-none absolute inset-0"
+                animate={{ opacity: spotifyPremiumAlertHover.active ? 0.5 : 0 }}
+                transition={{ duration: 0.16, ease: "easeOut" }}
                 style={{
-                  backgroundColor: "rgba(255,132,132,0.96)",
-                  transform: "rotate(45deg)",
+                  background: `radial-gradient(260px 120px at ${spotifyPremiumAlertHover.x}% ${spotifyPremiumAlertHover.y}%, rgba(255,255,255,0.16), rgba(255,255,255,0.07) 42%, rgba(255,255,255,0.015) 64%, rgba(255,255,255,0) 82%), linear-gradient(135deg, rgba(255,255,255,0.018), rgba(255,255,255,0.012))`,
+                  mixBlendMode: "color-dodge",
+                  filter: "blur(7px) saturate(1.02) contrast(1.02)",
                 }}
               />
-              <span
-                className="absolute h-[1.5px] w-[12px] rounded-full"
-                style={{
-                  backgroundColor: "rgba(255,132,132,0.96)",
-                  transform: "rotate(-45deg)",
-                }}
-              />
-            </button>
-          </div>
-        ) : null}
+              <div className="relative z-[1] inline-flex items-center gap-[8px]">
+                <svg
+                  width="24"
+                  height="24"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="h-[16px] w-[16px] shrink-0"
+                  aria-hidden="true"
+                >
+                  <path
+                    fillRule="evenodd"
+                    clipRule="evenodd"
+                    d="M12 2C17.5228 2 22 6.47715 22 12C22 17.5228 17.5228 22 12 22C6.47715 22 2 17.5228 2 12C2 6.47715 6.47715 2 12 2ZM12 15C11.4477 15 11 15.4477 11 16C11 16.5523 11.4477 17 12 17C12.5523 17 13 16.5523 13 16C13 15.4477 12.5523 15 12 15ZM12 7C11.5858 7 11.25 7.33579 11.25 7.75V12.25C11.25 12.6642 11.5858 13 12 13C12.4142 13 12.75 12.6642 12.75 12.25V7.75C12.75 7.33579 12.4142 7 12 7Z"
+                    fill="currentColor"
+                  />
+                </svg>
+                <span className="truncate">{SPOTIFY_PREMIUM_REQUIRED_ALERT}</span>
+              </div>
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
+        {isMobile && spotifyConnectCta ? <div className="mb-2">{spotifyConnectCta}</div> : null}
 
         {/* ── Widget ───────────────────────────────────────────── */}
         <motion.div
@@ -2348,122 +2576,7 @@ export default function DynamicIsland({
             }}
           />
         </motion.div>
-        {spotifyEnabled && spotifyStatus !== "ready" && (
-          <motion.button
-            type="button"
-            className="relative mt-2 inline-flex cursor-pointer items-center gap-[2px] overflow-hidden whitespace-nowrap rounded-full bg-[rgba(40,40,40,0.45)] px-[8px] py-[3px] text-[14px] text-white/90"
-            aria-busy={spotifyCtaBusy}
-            disabled={spotifyCtaBusy}
-            animate={{
-              scaleX: spotifyStatus === "connecting" ? 0.88 : 1,
-            }}
-            transition={{
-              scaleX: { duration: 0.34, ease: [0.22, 0.8, 0.26, 1] },
-            }}
-            style={{
-              background: "rgba(40,40,40,0.45)",
-              backdropFilter: "blur(40px) saturate(1.8)",
-              WebkitBackdropFilter: "blur(40px) saturate(1.8)",
-              border: "1px solid rgba(255,255,255,0.12)",
-              boxShadow:
-                "0 8px 24px rgba(0,0,0,0.22), inset 0 0.5px 0 rgba(255,255,255,0.1)",
-              cursor: spotifyCtaBusy ? "default" : "pointer",
-              opacity: spotifyCtaBusy ? 0.9 : 1,
-            }}
-            onMouseEnter={() => {
-              if (spotifyCtaHoverLeaveTimerRef.current !== null) {
-                window.clearTimeout(spotifyCtaHoverLeaveTimerRef.current);
-                spotifyCtaHoverLeaveTimerRef.current = null;
-              }
-              setSpotifyCtaHover((prev) => ({ ...prev, active: true }));
-            }}
-            onMouseLeave={() => {
-              if (spotifyCtaHoverLeaveTimerRef.current !== null) {
-                window.clearTimeout(spotifyCtaHoverLeaveTimerRef.current);
-              }
-              spotifyCtaHoverLeaveTimerRef.current = window.setTimeout(() => {
-                setSpotifyCtaHover((prev) => ({ ...prev, active: false }));
-                spotifyCtaHoverLeaveTimerRef.current = null;
-              }, 140);
-            }}
-            onMouseMove={(e) => {
-              const rect = e.currentTarget.getBoundingClientRect();
-              const nx = (e.clientX - rect.left) / rect.width;
-              const ny = (e.clientY - rect.top) / rect.height;
-              const clampedX = Math.max(0, Math.min(1, nx));
-              const clampedY = Math.max(0, Math.min(1, ny));
-              setSpotifyCtaHover({
-                active: true,
-                x: clampedX * 100,
-                y: clampedY * 100,
-              });
-            }}
-            onClick={() => {
-              if (spotifyStatus === "connecting") return;
-              if (!hasSpotifyConfig()) {
-                setSpotifyStatus("missing_config");
-                setSpotifyError(
-                  "Add VITE_SPOTIFY_CLIENT_ID and VITE_SPOTIFY_REDIRECT_URI in .env.local"
-                );
-                return;
-              }
-              void (async () => {
-                const token = await getValidSpotifyAccessToken();
-                if (token) {
-                  await connectSpotifyPlayer(true);
-                  return;
-                }
-                await startSpotifyLogin();
-              })();
-            }}
-          >
-            <motion.div
-              className="pointer-events-none absolute inset-0"
-              animate={{ opacity: spotifyCtaHover.active ? 0.92 : 0 }}
-              transition={{ duration: 0.3, ease: [0.32, 0.72, 0, 1] }}
-              style={{
-                background: `radial-gradient(120px 72px at ${spotifyCtaHover.x}% ${spotifyCtaHover.y}%, rgba(255,255,255,0.42), rgba(255,255,255,0.12) 46%, rgba(255,255,255,0) 78%)`,
-                filter: "blur(5px) saturate(1.04)",
-              }}
-            />
-            {spotifyCtaPulseId > 0 && (
-              <motion.div
-                key={`cta-sync-${spotifyCtaPulseId}`}
-                className="absolute inset-0 pointer-events-none"
-                initial={{ x: "-120%", opacity: 0 }}
-                animate={{ x: "120%", opacity: [0, 0.76, 0.24, 0] }}
-                transition={{
-                  duration: 0.86,
-                  ease: [0.25, 0.85, 0.25, 1],
-                }}
-                style={{
-                  background:
-                    "linear-gradient(100deg, rgba(255,255,255,0) 18%, rgba(255,255,255,0.58) 48%, rgba(255,255,255,0.2) 64%, rgba(255,255,255,0) 86%)",
-                  mixBlendMode: "screen",
-                  filter: "blur(6px)",
-                }}
-              />
-            )}
-            <SpotifyLogo
-              className="size-[17px]"
-              color="rgba(255,255,255,0.78)"
-            />
-            <motion.span
-              className="whitespace-nowrap"
-              animate={{
-                opacity: spotifyStatus === "connecting" ? 0 : 1,
-                y: spotifyStatus === "connecting" ? -2 : 0,
-                maxWidth: spotifyStatus === "connecting" ? 0 : 240,
-                marginLeft: spotifyStatus === "connecting" ? 0 : 2,
-                filter: spotifyStatus === "connecting" ? "blur(2px)" : "blur(0px)",
-              }}
-              transition={{ duration: 0.24, ease: [0.22, 0.8, 0.26, 1] }}
-              style={{ overflow: "hidden" }}
-            >
-              {spotifyCtaLabel}
-            </motion.span>
-          </motion.button>
-        )}
+        {!isMobile && spotifyConnectCta ? <div className="mt-2">{spotifyConnectCta}</div> : null}
       </motion.div>
     </div>
   );

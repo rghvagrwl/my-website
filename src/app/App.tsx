@@ -4,7 +4,7 @@ import MusicCanvas from "./components/MusicCanvas";
 import { PLAYLIST } from "./data/playlist";
 import profilePicture from "../../PNG image.png";
 
-type View = "home" | "music" | "newMusic" | "works" | "writing";
+type View = "home" | "music" | "works" | "writing";
 
 const BASE_FONT =
   'Inter, "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
@@ -12,7 +12,7 @@ let hasPlayedAboutIntro = false;
 
 function getViewFromPath(pathname: string): View {
   if (pathname === "/music") return "music";
-  if (pathname === "/new-music") return "newMusic";
+  if (pathname === "/new-music") return "music";
   if (pathname === "/works") return "works";
   if (pathname === "/writing") return "writing";
   return "home";
@@ -20,7 +20,6 @@ function getViewFromPath(pathname: string): View {
 
 function getPathFromView(view: View): string {
   if (view === "music") return "/music";
-  if (view === "newMusic") return "/new-music";
   if (view === "works") return "/works";
   if (view === "writing") return "/writing";
   return "/";
@@ -53,11 +52,6 @@ const MENU_ITEMS: Array<{
   {
     id: "music",
     label: "Music",
-    count: PLAYLIST.length,
-  },
-  {
-    id: "newMusic",
-    label: "New Music",
     count: PLAYLIST.length,
   },
   {
@@ -304,11 +298,10 @@ export default function App() {
   );
   const [menuHovered, setMenuHovered] = useState(false);
   const [menuPressed, setMenuPressed] = useState(false);
-  const [newMusicSelectedTrackIndex, setNewMusicSelectedTrackIndex] = useState(0);
-  const [newMusicTrackRequest, setNewMusicTrackRequest] = useState(0);
+  const [musicSelectedTrackIndex, setMusicSelectedTrackIndex] = useState(0);
+  const [musicTrackRequest, setMusicTrackRequest] = useState(0);
   const isMusicView = view === "music";
-  const isNewMusicView = view === "newMusic";
-  const showDynamicIsland = isMusicView || isNewMusicView;
+  const showDynamicIsland = isMusicView;
   const openMenu = () => setMenuOpen(true);
   const closeMenu = () => setMenuOpen(false);
 
@@ -327,13 +320,28 @@ export default function App() {
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (window.location.pathname !== "/new-music") return;
+
+    const url = new URL(window.location.href);
+    const hasAuthParams =
+      url.searchParams.has("code") ||
+      url.searchParams.has("state") ||
+      url.searchParams.has("error");
+    if (hasAuthParams) return;
+
+    window.history.replaceState({}, "", `/music${url.search}${url.hash}`);
+  }, []);
+
   return (
     <main
-      className="relative h-screen w-full overflow-hidden"
+      className="relative w-full overflow-hidden"
       style={{
         backgroundColor: "#F7F7F7",
         color: "#1E1E1E",
         fontFamily: BASE_FONT,
+        height: "100%",
       }}
     >
       <div
@@ -344,13 +352,12 @@ export default function App() {
           pointerEvents: menuOpen ? "none" : "auto",
         }}
       >
-        {isMusicView ? <MusicCanvas /> : null}
-        {isNewMusicView ? (
+        {isMusicView ? (
           <MusicCanvas
             disableTrackLinks
             onTrackSelect={(trackIndex) => {
-              setNewMusicSelectedTrackIndex(trackIndex);
-              setNewMusicTrackRequest((prev) => prev + 1);
+              setMusicSelectedTrackIndex(trackIndex);
+              setMusicTrackRequest((prev) => prev + 1);
             }}
           />
         ) : null}
@@ -379,9 +386,9 @@ export default function App() {
         }}
       >
         <DynamicIsland
-          spotifyEnabled={isNewMusicView}
-          selectedTrackIndex={newMusicSelectedTrackIndex}
-          selectedTrackRequest={newMusicTrackRequest}
+          spotifyEnabled={isMusicView}
+          selectedTrackIndex={musicSelectedTrackIndex}
+          selectedTrackRequest={musicTrackRequest}
         />
       </div>
       <div
