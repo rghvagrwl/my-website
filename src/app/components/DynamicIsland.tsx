@@ -31,7 +31,6 @@ const INTRO_SHIMMER_DURATION_MS = 1250;
 const SPOTIFY_PREMIUM_REQUIRED_ERROR = "Spotify premium required";
 const SPOTIFY_PREMIUM_REQUIRED_ALERT =
   "Playback is unavailable without Spotify Premium";
-const FORCE_SHOW_PREMIUM_ALERT_ON_CONNECT_FOR_TESTING = true;
 
 type SpotifyPlaybackStatus =
   | "missing_config"
@@ -464,8 +463,6 @@ export default function DynamicIsland({
     y: 50,
   });
   const [spotifyPremiumAlertDismissed, setSpotifyPremiumAlertDismissed] =
-    useState(false);
-  const [spotifyPremiumAlertTestVisible, setSpotifyPremiumAlertTestVisible] =
     useState(false);
   const [spotifyPremiumAlertHover, setSpotifyPremiumAlertHover] = useState({
     active: false,
@@ -1076,12 +1073,6 @@ export default function DynamicIsland({
     [reactivateSpotifyDevice]
   );
 
-  const wait = useCallback((ms: number) => {
-    return new Promise<void>((resolve) => {
-      window.setTimeout(resolve, ms);
-    });
-  }, []);
-
   const loadSpotifyTrackAnalysis = useCallback(async (trackId: string) => {
     if (!trackId) return;
     if (spotifyAnalysisRef.current?.trackId === trackId) return;
@@ -1293,10 +1284,6 @@ export default function DynamicIsland({
       setSpotifyError("Add VITE_SPOTIFY_CLIENT_ID and VITE_SPOTIFY_REDIRECT_URI in .env.local");
       return;
     }
-    if (FORCE_SHOW_PREMIUM_ALERT_ON_CONNECT_FOR_TESTING) {
-      setSpotifyPremiumAlertTestVisible(true);
-      setSpotifyPremiumAlertDismissed(false);
-    }
 
     try {
       if (spotifyPlayerRef.current) {
@@ -1309,7 +1296,7 @@ export default function DynamicIsland({
       setCurrentSpotifyTrackId(null);
       setSpotifyDurationSec(0);
       setIsPlaying(false);
-      connectLockedTrackIdRef.current = extractTrackId(PLAYLIST[trackIndex].songLink);
+      connectLockedTrackIdRef.current = null;
       if (pendingSpotifyTrackTimerRef.current !== null) {
         window.clearTimeout(pendingSpotifyTrackTimerRef.current);
         pendingSpotifyTrackTimerRef.current = null;
@@ -1341,24 +1328,11 @@ export default function DynamicIsland({
         currentSpotifyTrackIdRef.current = null;
         setSpotifyStatus("ready");
         setSpotifyError(null);
-        const expectedTrackId = extractTrackId(PLAYLIST[trackIndex].songLink);
-        connectLockedTrackIdRef.current = expectedTrackId;
+        connectLockedTrackIdRef.current = null;
         try {
           await ensureSpotifyDeviceActive(device_id, 6);
-          await wait(140);
-          for (let attempt = 0; attempt < 5; attempt += 1) {
-            await playSpotifyTrackByIndex(trackIndex, device_id);
-            await wait(200 + attempt * 120);
-            if (
-              expectedTrackId &&
-              currentSpotifyTrackIdRef.current === expectedTrackId
-            ) {
-              break;
-            }
-            await ensureSpotifyDeviceActive(device_id, 4 + attempt);
-          }
         } catch {
-          // Do not surface a hard error here; playback actions will retry activation.
+          // Keep silent; user can manually start playback.
         }
       });
 
@@ -1454,10 +1428,7 @@ export default function DynamicIsland({
     ensureSpotifyDeviceActive,
     loadSpotifyTrackAnalysis,
     playlistTrackIdSet,
-    playSpotifyTrackByIndex,
     spotifyActive,
-    trackIndex,
-    wait,
   ]);
 
   const openCurrentTrack = useCallback(() => {
@@ -1584,7 +1555,6 @@ export default function DynamicIsland({
     setSpotifyDurationSec(0);
     setSpotifyStatus("disconnected");
     setSpotifyError(null);
-    setSpotifyPremiumAlertTestVisible(false);
     setIsPlaying(false);
   }, []);
 
@@ -1653,9 +1623,7 @@ export default function DynamicIsland({
   const playerWidth = Math.max(264, Math.min(332, viewportWidth - 48));
   const albumSize = Math.max(236, Math.min(320, playerWidth - 12));
   const playerIntroStartOffset = Math.max(420, Math.floor(viewportHeight * 0.68));
-  const showSpotifyPremiumAlert =
-    (FORCE_SHOW_PREMIUM_ALERT_ON_CONNECT_FOR_TESTING && spotifyPremiumAlertTestVisible) ||
-    isSpotifyPremiumRequiredMessage(spotifyError);
+  const showSpotifyPremiumAlert = isSpotifyPremiumRequiredMessage(spotifyError);
   const sliderStretch = isDragging
     ? {
         widthOffset: Math.abs(dragOverscroll) * 30,
@@ -2104,7 +2072,6 @@ export default function DynamicIsland({
               onClick={(e) => {
                 e.stopPropagation();
                 setSpotifyPremiumAlertDismissed(true);
-                setSpotifyPremiumAlertTestVisible(false);
               }}
             >
               <motion.div
