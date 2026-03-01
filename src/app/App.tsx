@@ -2,12 +2,12 @@ import { useEffect, useState, type CSSProperties } from "react";
 import DynamicIsland from "./components/DynamicIsland";
 import MusicCanvas from "./components/MusicCanvas";
 import { PLAYLIST } from "./data/playlist";
-import profilePicture from "../../PNG image.png";
 
 type View = "home" | "music" | "works" | "writing";
 
 const BASE_FONT =
   'Inter, "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+const PROFILE_PICTURE_PATH = "/raghav-profile.png";
 let hasPlayedAboutIntro = false;
 
 function getViewFromPath(pathname: string): View {
@@ -23,6 +23,13 @@ function getPathFromView(view: View): string {
   if (view === "works") return "/works";
   if (view === "writing") return "/writing";
   return "/";
+}
+
+function getDocumentTitle(view: View): string {
+  if (view === "music") return "Music – Raghav Agarwal";
+  if (view === "works") return "Works – Raghav Agarwal";
+  if (view === "writing") return "Writing – Raghav Agarwal";
+  return "Raghav Agarwal";
 }
 
 function glassButtonStyle(hovered: boolean, pressed: boolean): CSSProperties {
@@ -117,7 +124,7 @@ function HomeContent() {
         style={{ color: "rgba(30,30,30,0.8)" }}
       >
         <img
-          src={profilePicture}
+          src={PROFILE_PICTURE_PATH}
           alt="Raghav Agarwal profile picture"
           width={32}
           height={32}
@@ -319,6 +326,11 @@ export default function App() {
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    document.title = getDocumentTitle(view);
+  }, [view]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;

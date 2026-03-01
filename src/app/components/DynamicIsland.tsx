@@ -2135,6 +2135,25 @@ export default function DynamicIsland({
                   />
                 </svg>
                 <span className="truncate">{SPOTIFY_PREMIUM_REQUIRED_ALERT}</span>
+                <span
+                  className="relative ml-[2px] inline-flex h-[14px] w-[14px] shrink-0 items-center justify-center opacity-90"
+                  aria-hidden="true"
+                >
+                  <span
+                    className="absolute h-[1.5px] w-[12px] rounded-full"
+                    style={{
+                      backgroundColor: "rgba(255,208,98,0.98)",
+                      transform: "rotate(45deg)",
+                    }}
+                  />
+                  <span
+                    className="absolute h-[1.5px] w-[12px] rounded-full"
+                    style={{
+                      backgroundColor: "rgba(255,208,98,0.98)",
+                      transform: "rotate(-45deg)",
+                    }}
+                  />
+                </span>
               </div>
             </motion.div>
           ) : null}
