@@ -128,6 +128,16 @@
     @apply bg-background text-foreground;
   }
 
+  ::selection {
+    background: rgba(30, 30, 30, 0.09);
+    color: inherit;
+  }
+
+  ::-moz-selection {
+    background: rgba(30, 30, 30, 0.09);
+    color: inherit;
+  }
+
   /**
   * Default typography styles for HTML elements (h1-h4, p, label, button, input).
   * These are in @layer base, so Tailwind utility classes (like text-sm, text-lg) automatically override them.
@@ -193,4 +203,82 @@
   animation: marquee var(--marquee-duration, 10s) linear infinite;
   animation-delay: var(--marquee-delay, 5s);
   animation-fill-mode: backwards;
+}
+
+@keyframes musicCanvasFadeIn {
+  0% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes musicCanvasCoverPopIn {
+  0% {
+    opacity: 0;
+    transform: scale(0.78);
+  }
+  62% {
+    opacity: 1;
+    transform: scale(1.06);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes musicCanvasMarquee {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(calc(-50% - var(--music-marquee-gap, 16px) / 2));
+  }
+}
+
+@keyframes menuFadeIn {
+  0% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes menuFadeOut {
+  0% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes menuContentIn {
+  0% {
+    opacity: 0;
+    transform: translateY(22px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes menuContentOut {
+  0% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+}
+
+html.is-scrubbing,
+html.is-scrubbing * {
+  cursor: grabbing !important;
 }
