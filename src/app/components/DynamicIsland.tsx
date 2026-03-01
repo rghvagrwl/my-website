@@ -413,10 +413,12 @@ function isSpotifyPremiumRequiredMessage(message: string | null | undefined) {
 
 /* ── Main component ─────────────────────────────────────────────── */
 export default function DynamicIsland({
+  entryKey = 0,
   spotifyEnabled = false,
   selectedTrackIndex = 0,
   selectedTrackRequest = 0,
 }: {
+  entryKey?: number;
   spotifyEnabled?: boolean;
   selectedTrackIndex?: number;
   selectedTrackRequest?: number;
@@ -778,19 +780,24 @@ export default function DynamicIsland({
       url.searchParams.has("code") || url.searchParams.has("error");
 
     (async () => {
-      if (hasAuthParams) {
-        try {
-          await completeSpotifyAuthFromUrl();
-        } catch (error) {
-          setSpotifyStatus("error");
-          setSpotifyError((error as Error).message);
-          return;
+      try {
+        if (hasAuthParams) {
+          try {
+            await completeSpotifyAuthFromUrl();
+          } catch (error) {
+            setSpotifyStatus("error");
+            setSpotifyError((error as Error).message);
+            return;
+          }
         }
-      }
 
-      const token = await getValidSpotifyAccessToken();
-      if (!token) return;
-      await connectSpotifyPlayer();
+        const token = await getValidSpotifyAccessToken();
+        if (!token) return;
+        await connectSpotifyPlayer();
+      } catch (error) {
+        setSpotifyStatus("error");
+        setSpotifyError((error as Error).message);
+      }
     })();
   }, [spotifyActive]);
 
@@ -1691,12 +1698,17 @@ export default function DynamicIsland({
           return;
         }
         void (async () => {
-          const token = await getValidSpotifyAccessToken();
-          if (token) {
-            await connectSpotifyPlayer(true);
-            return;
+          try {
+            const token = await getValidSpotifyAccessToken();
+            if (token) {
+              await connectSpotifyPlayer(true);
+              return;
+            }
+            await startSpotifyLogin();
+          } catch (error) {
+            setSpotifyStatus("error");
+            setSpotifyError((error as Error).message);
           }
-          await startSpotifyLogin();
         })();
       }}
     >
@@ -1847,11 +1859,12 @@ export default function DynamicIsland({
       )}
 
       <motion.div
+        key={`dynamic-island-entry-${entryKey}`}
         className="flex flex-col items-center relative z-10 pointer-events-auto"
-        initial={{ y: playerIntroStartOffset }}
-        animate={{ y: 0 }}
+        initial={{ top: playerIntroStartOffset }}
+        animate={{ top: 0 }}
         transition={{
-          y: {
+          top: {
             delay: INTRO_DELAY_MS / 1000,
             type: "spring",
             stiffness: 135,
@@ -1861,7 +1874,7 @@ export default function DynamicIsland({
         }}
         style={{
           cursor: artExpanded ? "default" : "auto",
-          willChange: "transform",
+          willChange: "top",
         }}
         onClick={(e) => {
           if (artExpanded) e.stopPropagation();
@@ -2129,21 +2142,16 @@ export default function DynamicIsland({
 
         {/* ── Widget ───────────────────────────────────────────── */}
         <motion.div
-          className="relative overflow-hidden flex flex-col items-center justify-center rounded-[24px] border border-white/[0.12] p-[16px]"
+          className="relative"
           animate={{
-            y: spotifyEnabled && spotifyStatus === "connecting" ? 14 : 0,
+            top: spotifyEnabled && spotifyStatus === "connecting" ? 14 : 0,
           }}
           transition={{
-            y: { type: "spring", stiffness: 210, damping: 20, mass: 0.85 },
+            top: { type: "spring", stiffness: 210, damping: 20, mass: 0.85 },
           }}
           style={{
             width: playerWidth,
             zIndex: 1,
-            backgroundColor: "rgba(40, 40, 40, 0.45)",
-            backdropFilter: "blur(40px) saturate(1.8)",
-            WebkitBackdropFilter: "blur(40px) saturate(1.8)",
-            boxShadow:
-              "0 8px 32px rgba(0,0,0,0.3), inset 0 0.5px 0 rgba(255,255,255,0.15)",
           }}
           onMouseDownCapture={triggerPlayerRipple}
           onMouseEnter={() => setPlayerHover((prev) => ({ ...prev, active: true }))}
@@ -2156,6 +2164,17 @@ export default function DynamicIsland({
             }))
           }
         >
+          <div
+            className="relative overflow-hidden flex flex-col items-center justify-center rounded-[24px] border border-white/[0.12] p-[16px]"
+            style={{
+              backgroundColor: "rgba(26,26,26,0.28)",
+              backdropFilter: "blur(40px) saturate(1.9)",
+              WebkitBackdropFilter: "blur(40px) saturate(1.9)",
+              border: "1px solid rgba(255,255,255,0.24)",
+              boxShadow:
+                "0 10px 26px rgba(0,0,0,0.22), inset 0 1px 0 rgba(255,255,255,0.22)",
+            }}
+          >
           {showIntroShimmer && (
             <motion.div
               className="absolute inset-0 pointer-events-none"
@@ -2561,6 +2580,7 @@ export default function DynamicIsland({
               WebkitMaskImage: `radial-gradient(140px 80px at ${playerHover.edgeX}% ${playerHover.edgeY}%, rgba(0,0,0,1) 0%, rgba(0,0,0,0.95) 42%, rgba(0,0,0,0) 80%)`,
             }}
           />
+          </div>
         </motion.div>
         {!isMobile && spotifyConnectCta ? <div className="mt-2">{spotifyConnectCta}</div> : null}
       </motion.div>

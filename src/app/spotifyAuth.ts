@@ -28,8 +28,27 @@ function getClientId(): string {
 
 function getRedirectUri(): string {
   const configured = import.meta.env.VITE_SPOTIFY_REDIRECT_URI as string | undefined;
-  if (configured && configured.trim().length > 0) return configured.trim();
-  return `${window.location.origin}/music`;
+  const runtimeDefault = `${window.location.origin}/music`;
+  if (!configured || configured.trim().length === 0) return runtimeDefault;
+
+  const value = configured.trim();
+  try {
+    const configuredUrl = new URL(value);
+    const currentHost = window.location.hostname;
+    const configuredHost = configuredUrl.hostname;
+    const isLocalHost = (host: string) => host === "localhost" || host === "127.0.0.1";
+
+    // Keep local development stable even when the dev server port changes.
+    if (isLocalHost(currentHost) && isLocalHost(configuredHost)) {
+      const nextPath = configuredUrl.pathname && configuredUrl.pathname !== "/"
+        ? configuredUrl.pathname
+        : "/music";
+      return `${window.location.origin}${nextPath}`;
+    }
+    return configuredUrl.toString();
+  } catch {
+    return runtimeDefault;
+  }
 }
 
 function randomString(length: number): string {

@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import DynamicIsland from "./components/DynamicIsland";
 import MusicCanvas from "./components/MusicCanvas";
 import { PLAYLIST } from "./data/playlist";
@@ -307,8 +307,10 @@ export default function App() {
   const [menuPressed, setMenuPressed] = useState(false);
   const [musicSelectedTrackIndex, setMusicSelectedTrackIndex] = useState(0);
   const [musicTrackRequest, setMusicTrackRequest] = useState(0);
+  const [musicEntryKey, setMusicEntryKey] = useState(0);
   const isMusicView = view === "music";
   const showDynamicIsland = isMusicView;
+  const prevIsMusicViewRef = useRef(isMusicView);
   const openMenu = () => setMenuOpen(true);
   const closeMenu = () => setMenuOpen(false);
 
@@ -346,6 +348,13 @@ export default function App() {
     window.history.replaceState({}, "", `/music${url.search}${url.hash}`);
   }, []);
 
+  useEffect(() => {
+    if (isMusicView && !prevIsMusicViewRef.current) {
+      setMusicEntryKey((prev) => prev + 1);
+    }
+    prevIsMusicViewRef.current = isMusicView;
+  }, [isMusicView]);
+
   return (
     <main
       className="relative w-full overflow-hidden"
@@ -377,32 +386,29 @@ export default function App() {
         {view === "works" ? <PlaceholderPage title="Works" /> : null}
         {view === "writing" ? <PlaceholderPage title="Writing" /> : null}
       </div>
-      <div
-        className="pointer-events-none absolute inset-0 z-20"
-        style={{
-          background: [
-            "linear-gradient(to bottom, rgba(247,247,247,0.9) 0%, rgba(247,247,247,0) 8%)",
-            "linear-gradient(to top, rgba(247,247,247,0.9) 0%, rgba(247,247,247,0) 8%)",
-            "linear-gradient(to right, rgba(247,247,247,0.9) 0%, rgba(247,247,247,0) 6%)",
-            "linear-gradient(to left, rgba(247,247,247,0.9) 0%, rgba(247,247,247,0) 6%)",
-          ].join(", "),
-        }}
-      />
-      <div
-        className="fixed inset-0 z-[25] pointer-events-none transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.22,0.9,0.24,1)]"
-        aria-hidden={!showDynamicIsland}
-        style={{
-          opacity: showDynamicIsland ? 1 : 0,
-          transform: showDynamicIsland ? "translateY(0px)" : "translateY(56px)",
-          willChange: "opacity, transform",
-        }}
-      >
-        <DynamicIsland
-          spotifyEnabled={isMusicView}
-          selectedTrackIndex={musicSelectedTrackIndex}
-          selectedTrackRequest={musicTrackRequest}
+      {!isMusicView ? (
+        <div
+          className="pointer-events-none absolute inset-0 z-20"
+          style={{
+            background: [
+              "linear-gradient(to bottom, rgba(247,247,247,0.9) 0%, rgba(247,247,247,0) 8%)",
+              "linear-gradient(to top, rgba(247,247,247,0.9) 0%, rgba(247,247,247,0) 8%)",
+              "linear-gradient(to right, rgba(247,247,247,0.9) 0%, rgba(247,247,247,0) 6%)",
+              "linear-gradient(to left, rgba(247,247,247,0.9) 0%, rgba(247,247,247,0) 6%)",
+            ].join(", "),
+          }}
         />
-      </div>
+      ) : null}
+      {showDynamicIsland ? (
+        <div className="fixed inset-0 z-[25] pointer-events-none">
+          <DynamicIsland
+            entryKey={musicEntryKey}
+            spotifyEnabled={isMusicView}
+            selectedTrackIndex={musicSelectedTrackIndex}
+            selectedTrackRequest={musicTrackRequest}
+          />
+        </div>
+      ) : null}
       <div
         className="pointer-events-none absolute inset-0 z-[26] transition-opacity duration-[500ms] ease-[cubic-bezier(0.22,0.9,0.24,1)]"
         style={{
