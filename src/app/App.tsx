@@ -389,11 +389,12 @@ export default function App() {
         }}
       />
       <div
-        className="fixed inset-0 z-[25] pointer-events-none transition-opacity duration-200"
+        className="fixed inset-0 z-[25] pointer-events-none transition-[filter,opacity,transform] duration-300"
         aria-hidden={!showDynamicIsland}
         style={{
           opacity: showDynamicIsland ? 1 : 0,
-          willChange: "opacity",
+          transform: showDynamicIsland ? undefined : "translateY(24px)",
+          visibility: showDynamicIsland ? "visible" : "hidden",
         }}
       >
         <DynamicIsland
