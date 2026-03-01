@@ -2167,12 +2167,12 @@ export default function DynamicIsland({
           <div
             className="relative overflow-hidden flex flex-col items-center justify-center rounded-[24px] border border-white/[0.12] p-[16px]"
             style={{
-              backgroundColor: "rgba(26,26,26,0.28)",
-              backdropFilter: "blur(40px) saturate(1.9)",
-              WebkitBackdropFilter: "blur(40px) saturate(1.9)",
-              border: "1px solid rgba(255,255,255,0.24)",
+              background: "rgba(40,40,40,0.45)",
+              backdropFilter: "blur(40px) saturate(1.8)",
+              WebkitBackdropFilter: "blur(40px) saturate(1.8)",
+              border: "1px solid rgba(255,255,255,0.12)",
               boxShadow:
-                "0 10px 26px rgba(0,0,0,0.22), inset 0 1px 0 rgba(255,255,255,0.22)",
+                "0 8px 24px rgba(0,0,0,0.22), inset 0 0.5px 0 rgba(255,255,255,0.1)",
             }}
           >
           {showIntroShimmer && (
