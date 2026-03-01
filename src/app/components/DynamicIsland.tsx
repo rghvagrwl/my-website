@@ -2057,7 +2057,7 @@ export default function DynamicIsland({
         <AnimatePresence initial={false}>
           {spotifyActive && showSpotifyPremiumAlert && !spotifyPremiumAlertDismissed ? (
             <motion.div
-              className="relative z-20 mb-2 inline-flex max-w-[332px] cursor-pointer items-center gap-[8px] overflow-hidden rounded-full px-[10px] py-[6px] text-[12px] font-medium text-[rgba(255,208,98,0.98)]"
+              className="relative z-20 mb-2 inline-flex w-fit cursor-pointer items-center gap-[8px] overflow-visible rounded-full px-[10px] py-[6px] text-[12px] font-medium text-[rgba(255,208,98,0.98)]"
               initial={{ opacity: 0, y: 8, scale: 0.97 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: -6, scale: 0.98 }}
@@ -2134,7 +2134,7 @@ export default function DynamicIsland({
                     fill="currentColor"
                   />
                 </svg>
-                <span className="truncate">{SPOTIFY_PREMIUM_REQUIRED_ALERT}</span>
+                <span>{SPOTIFY_PREMIUM_REQUIRED_ALERT}</span>
                 <span
                   className="relative ml-[2px] inline-flex h-[14px] w-[14px] shrink-0 items-center justify-center opacity-90"
                   aria-hidden="true"

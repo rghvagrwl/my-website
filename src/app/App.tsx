@@ -26,10 +26,10 @@ function getPathFromView(view: View): string {
 }
 
 function getDocumentTitle(view: View): string {
-  if (view === "music") return "Music – Raghav Agarwal";
-  if (view === "works") return "Works – Raghav Agarwal";
-  if (view === "writing") return "Writing – Raghav Agarwal";
-  return "Raghav Agarwal";
+  if (view === "music") return "music – raghav agarwal";
+  if (view === "works") return "works – raghav agarwal";
+  if (view === "writing") return "writing – raghav agarwal";
+  return "raghav agarwal";
 }
 
 function glassButtonStyle(hovered: boolean, pressed: boolean): CSSProperties {
