@@ -1,7 +1,11 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import DynamicIsland from "./components/DynamicIsland";
 import MusicCanvas from "./components/MusicCanvas";
-import { PLAYLIST } from "./data/playlist";
+import { SESSION_PLAYLIST, type PlaylistTrack } from "./data/playlist";
+import {
+  fetchSpotifyPlaylistsTracks,
+  getConfiguredSpotifyPlaylistIds,
+} from "./data/spotifyPlaylist";
 
 type View = "home" | "music" | "works" | "writing";
 
@@ -47,31 +51,57 @@ function glassButtonStyle(hovered: boolean, pressed: boolean): CSSProperties {
   };
 }
 
-const MENU_ITEMS: Array<{
-  id: View;
-  label: string;
-  count?: number;
-}> = [
-  {
-    id: "home",
-    label: "About",
-  },
-  {
-    id: "music",
-    label: "Music",
-    count: PLAYLIST.length,
-  },
-  {
-    id: "works",
-    label: "Works",
-    count: 0,
-  },
-  {
-    id: "writing",
-    label: "Writing",
-    count: 0,
-  },
-];
+function getArtistKey(artist: string): string {
+  const primary = artist.split(",")[0] ?? artist;
+  const normalized = primary.trim().toLowerCase().replace(/\s+/g, " ");
+  return normalized || "unknown";
+}
+
+function spreadTracksByArtist(tracks: PlaylistTrack[]): PlaylistTrack[] {
+  if (tracks.length <= 2) return tracks;
+
+  const queues = new Map<string, PlaylistTrack[]>();
+  tracks.forEach((track) => {
+    const artistKey = getArtistKey(track.artist);
+    const existing = queues.get(artistKey);
+    if (existing) {
+      existing.push(track);
+      return;
+    }
+    queues.set(artistKey, [track]);
+  });
+
+  const result: PlaylistTrack[] = [];
+  let prevArtistKey = "";
+
+  while (result.length < tracks.length) {
+    const candidates = Array.from(queues.entries())
+      .filter(([, list]) => list.length > 0)
+      .sort((a, b) => {
+        if (b[1].length !== a[1].length) return b[1].length - a[1].length;
+        return a[0].localeCompare(b[0]);
+      });
+
+    if (candidates.length === 0) break;
+
+    const selected =
+      candidates.find(([artistKey]) => artistKey !== prevArtistKey) ?? candidates[0];
+    const [artistKey, queue] = selected;
+    const nextTrack = queue.shift();
+    if (!nextTrack) {
+      queues.delete(artistKey);
+      continue;
+    }
+
+    result.push(nextTrack);
+    prevArtistKey = artistKey;
+    if (queue.length === 0) {
+      queues.delete(artistKey);
+    }
+  }
+
+  return result.length === tracks.length ? result : tracks;
+}
 
 function HomeContent() {
   const [shouldAnimate] = useState(() => !hasPlayedAboutIntro);
@@ -232,9 +262,15 @@ function HomeContent() {
 function MenuOverlay({
   onSelect,
   isOpen,
+  items,
 }: {
   onSelect: (view: View) => void;
   isOpen: boolean;
+  items: Array<{
+    id: View;
+    label: string;
+    count?: number;
+  }>;
 }) {
   return (
     <div
@@ -264,7 +300,7 @@ function MenuOverlay({
       >
         <div className="flex h-full items-end">
           <div className="w-full space-y-10">
-            {MENU_ITEMS.map((item) => (
+            {items.map((item) => (
               <button
                 key={item.id}
                 type="button"
@@ -305,6 +341,7 @@ export default function App() {
   );
   const [menuHovered, setMenuHovered] = useState(false);
   const [menuPressed, setMenuPressed] = useState(false);
+  const [playlistTracks, setPlaylistTracks] = useState<PlaylistTrack[]>(() => SESSION_PLAYLIST);
   const [musicSelectedTrackIndex, setMusicSelectedTrackIndex] = useState(0);
   const [musicTrackRequest, setMusicTrackRequest] = useState(0);
   const [musicEntryKey, setMusicEntryKey] = useState(0);
@@ -313,6 +350,10 @@ export default function App() {
   const prevIsMusicViewRef = useRef(isMusicView);
   const openMenu = () => setMenuOpen(true);
   const closeMenu = () => setMenuOpen(false);
+  const displayPlaylistTracks = useMemo(
+    () => spreadTracksByArtist(playlistTracks),
+    [playlistTracks]
+  );
 
   const navigateToView = (nextView: View) => {
     const nextPath = getPathFromView(nextView);
@@ -355,6 +396,63 @@ export default function App() {
     prevIsMusicViewRef.current = isMusicView;
   }, [isMusicView]);
 
+  useEffect(() => {
+    const playlistIds = getConfiguredSpotifyPlaylistIds();
+    if (playlistIds.length === 0) return;
+
+    let cancelled = false;
+    const syncFromSpotify = async () => {
+      try {
+        const spotifyTracks = await fetchSpotifyPlaylistsTracks(playlistIds);
+        if (!spotifyTracks || spotifyTracks.length === 0 || cancelled) return;
+        setPlaylistTracks((prev) => {
+          if (
+            prev.length === spotifyTracks.length &&
+            prev.every((track, index) => track.songLink === spotifyTracks[index].songLink)
+          ) {
+            return prev;
+          }
+          return spotifyTracks;
+        });
+      } catch {
+        // Keep fallback CSV playlist when sync is unavailable.
+      }
+    };
+
+    void syncFromSpotify();
+    const intervalId = window.setInterval(() => {
+      void syncFromSpotify();
+    }, 5 * 60 * 1000);
+    const handleWindowFocus = () => {
+      void syncFromSpotify();
+    };
+    window.addEventListener("focus", handleWindowFocus);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", handleWindowFocus);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (displayPlaylistTracks.length === 0) return;
+    setMusicSelectedTrackIndex(
+      (prev) => (prev + displayPlaylistTracks.length) % displayPlaylistTracks.length
+    );
+  }, [displayPlaylistTracks.length]);
+
+  const menuItems: Array<{
+    id: View;
+    label: string;
+    count?: number;
+  }> = [
+    { id: "home", label: "About" },
+    { id: "music", label: "Music", count: displayPlaylistTracks.length },
+    { id: "works", label: "Works", count: 0 },
+    { id: "writing", label: "Writing", count: 0 },
+  ];
+
   return (
     <main
       className="relative w-full overflow-hidden"
@@ -375,6 +473,7 @@ export default function App() {
       >
         {isMusicView ? (
           <MusicCanvas
+            playlist={displayPlaylistTracks}
             disableTrackLinks
             onTrackSelect={(trackIndex) => {
               setMusicSelectedTrackIndex(trackIndex);
@@ -403,6 +502,7 @@ export default function App() {
         <div className="fixed inset-0 z-[25] pointer-events-none">
           <DynamicIsland
             entryKey={musicEntryKey}
+            playlist={displayPlaylistTracks}
             spotifyEnabled={isMusicView}
             selectedTrackIndex={musicSelectedTrackIndex}
             selectedTrackRequest={musicTrackRequest}
@@ -465,6 +565,7 @@ export default function App() {
 
       <MenuOverlay
         isOpen={menuOpen}
+        items={menuItems}
         onSelect={(nextView) => {
           navigateToView(nextView);
           closeMenu();

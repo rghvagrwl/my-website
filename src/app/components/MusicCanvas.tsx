@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { SESSION_PLAYLIST as PLAYLIST } from "../data/playlist";
+import { SESSION_PLAYLIST, type PlaylistTrack } from "../data/playlist";
 
 const DESKTOP = {
   columns: 14,
@@ -174,7 +174,7 @@ function HoverMarquee({
   );
 }
 
-type Track = (typeof PLAYLIST)[number];
+type Track = PlaylistTrack;
 type CardMeta = {
   track: Track;
   i: number;
@@ -197,6 +197,7 @@ const MusicCard = memo(function MusicCard({
   artistClassName,
   disableTrackLinks,
   onTrackSelect,
+  playlistLength,
 }: {
   card: CardMeta;
   setRef: (el: HTMLAnchorElement | null) => void;
@@ -209,6 +210,7 @@ const MusicCard = memo(function MusicCard({
   artistClassName: string;
   disableTrackLinks?: boolean;
   onTrackSelect?: (trackIndex: number) => void;
+  playlistLength: number;
 }) {
   const [isHovered, setIsHovered] = useState(false);
   const [isRevealReady, setIsRevealReady] = useState(!playLoadInAnimation);
@@ -242,10 +244,10 @@ const MusicCard = memo(function MusicCard({
   return (
     <a
       ref={setRef}
-      href={card.track.songLink}
+      href={disableTrackLinks ? undefined : card.track.songLink}
       target={disableTrackLinks ? undefined : "_blank"}
       rel={disableTrackLinks ? undefined : "noreferrer"}
-      className="absolute cursor-inherit"
+      className={`absolute ${disableTrackLinks ? "cursor-pointer" : "cursor-inherit"}`}
       style={{
         width: coverSize,
         height: cardHeight,
@@ -267,9 +269,9 @@ const MusicCard = memo(function MusicCard({
           e.preventDefault();
           return;
         }
-        if (disableTrackLinks && onTrackSelect) {
+        if (disableTrackLinks && onTrackSelect && playlistLength > 0) {
           e.preventDefault();
-          onTrackSelect(card.i % PLAYLIST.length);
+          onTrackSelect(card.i);
         }
       }}
     >
@@ -349,9 +351,11 @@ const MusicCard = memo(function MusicCard({
 });
 
 export default function MusicCanvas({
+  playlist,
   disableTrackLinks = false,
   onTrackSelect,
 }: {
+  playlist: PlaylistTrack[];
   disableTrackLinks?: boolean;
   onTrackSelect?: (trackIndex: number) => void;
 }) {
@@ -372,10 +376,11 @@ export default function MusicCanvas({
   }, []);
 
   const isMobile = viewportWidth < 768;
+  const tracks = playlist.length > 0 ? playlist : SESSION_PLAYLIST;
   const layout = isMobile ? MOBILE : DESKTOP;
-  const columns = layout.columns;
-  const rows = Math.max(1, Math.ceil(PLAYLIST.length / columns));
-  const displayCount = rows * columns;
+  const columns = Math.max(1, Math.min(layout.columns, tracks.length));
+  const displayCount = tracks.length;
+  const rows = Math.max(1, Math.ceil(displayCount / columns));
   const worldW = columns * layout.cellW;
   const worldH = rows * layout.cellH;
 
@@ -419,7 +424,7 @@ export default function MusicCanvas({
   const cardMeta: CardMeta[] = useMemo(
     () =>
       Array.from({ length: displayCount }, (_, i) => {
-        const track = PLAYLIST[i % PLAYLIST.length];
+        const track = tracks[i];
         const col = i % columns;
         const row = Math.floor(i / columns);
         const x = col * layout.cellW - worldW / 2 + layout.xOffset;
@@ -436,7 +441,17 @@ export default function MusicCanvas({
           tilt: seededNoise(i + 17) * COVER_ROTATE_MAX * 2 - COVER_ROTATE_MAX,
         };
       }),
-    [displayCount, columns, layout.cellH, layout.cellW, layout.xOffset, layout.yOffset, worldH, worldW]
+    [
+      displayCount,
+      columns,
+      layout.cellH,
+      layout.cellW,
+      layout.xOffset,
+      layout.yOffset,
+      tracks,
+      worldH,
+      worldW,
+    ]
   );
   const flushTransforms = useCallback(() => {
     frameRef.current = null;
@@ -531,21 +546,24 @@ export default function MusicCanvas({
         dragRef.current.lastX = e.clientX;
         dragRef.current.lastY = e.clientY;
         dragRef.current.lastTs = e.timeStamp;
-        setIsDragging(true);
-        e.currentTarget.setPointerCapture(e.pointerId);
+        setIsDragging(false);
       }}
       onPointerMove={(e) => {
         if (!dragRef.current.active) return;
+        const totalDx = e.clientX - dragRef.current.startX;
+        const totalDy = e.clientY - dragRef.current.startY;
+        if (!dragRef.current.moved && Math.hypot(totalDx, totalDy) > DRAG_CLICK_SLOP_PX) {
+          dragRef.current.moved = true;
+          setIsDragging(true);
+          e.currentTarget.setPointerCapture(e.pointerId);
+        }
+        if (!dragRef.current.moved) return;
+
         const prevTs = dragRef.current.lastTs || e.timeStamp;
         const dt = Math.max(8, Math.min(32, e.timeStamp - prevTs));
         const dx = e.clientX - dragRef.current.lastX;
         const dy = e.clientY - dragRef.current.lastY;
         if (dx === 0 && dy === 0) return;
-        const totalDx = e.clientX - dragRef.current.startX;
-        const totalDy = e.clientY - dragRef.current.startY;
-        if (Math.hypot(totalDx, totalDy) > DRAG_CLICK_SLOP_PX) {
-          dragRef.current.moved = true;
-        }
         dragRef.current.lastX = e.clientX;
         dragRef.current.lastY = e.clientY;
         dragRef.current.lastTs = e.timeStamp;
@@ -569,7 +587,9 @@ export default function MusicCanvas({
           velocityRef.current.y = 0;
         }
         setIsDragging(false);
-        e.currentTarget.releasePointerCapture(e.pointerId);
+        if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+          e.currentTarget.releasePointerCapture(e.pointerId);
+        }
       }}
       onPointerCancel={() => {
         dragRef.current.active = false;
@@ -610,6 +630,7 @@ export default function MusicCanvas({
             artistClassName={artistClassName}
             disableTrackLinks={disableTrackLinks}
             onTrackSelect={onTrackSelect}
+            playlistLength={tracks.length}
             setRef={(el) => {
               cardRefs.current[i] = el;
             }}

@@ -11,7 +11,7 @@ import { motion, AnimatePresence } from "motion/react";
 import svgPaths from "../../imports/svg-m4lwl8pe3p";
 import svgPathsPlaying from "../../imports/svg-umafma3ph";
 import grainGif from "../../../Grain (1).gif";
-import { SESSION_PLAYLIST as PLAYLIST } from "../data/playlist";
+import { SESSION_PLAYLIST, type PlaylistTrack } from "../data/playlist";
 import {
   completeSpotifyAuthFromUrl,
   getValidSpotifyAccessToken,
@@ -414,11 +414,13 @@ function isSpotifyPremiumRequiredMessage(message: string | null | undefined) {
 /* ── Main component ─────────────────────────────────────────────── */
 export default function DynamicIsland({
   entryKey = 0,
+  playlist,
   spotifyEnabled = false,
   selectedTrackIndex = 0,
   selectedTrackRequest = 0,
 }: {
   entryKey?: number;
+  playlist: PlaylistTrack[];
   spotifyEnabled?: boolean;
   selectedTrackIndex?: number;
   selectedTrackRequest?: number;
@@ -438,12 +440,18 @@ export default function DynamicIsland({
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
+  const tracks = playlist.length > 0 ? playlist : SESSION_PLAYLIST;
   const [trackIndex, setTrackIndex] = useState(0);
-  const track = PLAYLIST[trackIndex];
+  const track = tracks[trackIndex];
   const backgroundDrift = useMemo(
     () => createDriftKeyframes(trackIndex),
     [trackIndex]
   );
+
+  useEffect(() => {
+    if (tracks.length === 0) return;
+    setTrackIndex((prev) => (prev + tracks.length) % tracks.length);
+  }, [tracks.length]);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [spotifyStatus, setSpotifyStatus] = useState<SpotifyPlaybackStatus>(() =>
@@ -559,12 +567,12 @@ export default function DynamicIsland({
   const spotifyActive = spotifyEnabled;
   const playlistTrackIdSet = useMemo(() => {
     const set = new Set<string>();
-    PLAYLIST.forEach((item) => {
+    tracks.forEach((item) => {
       const id = extractTrackId(item.songLink);
       if (id) set.add(id);
     });
     return set;
-  }, []);
+  }, [tracks]);
 
   const activeDurationSec = spotifyEnabled
     ? Math.max(0, spotifyDurationSec)
@@ -802,11 +810,21 @@ export default function DynamicIsland({
   }, [spotifyActive]);
 
   useEffect(() => {
-    if (!spotifyActive || selectedTrackRequest <= 0) return;
-    setTrackIndex((selectedTrackIndex + PLAYLIST.length) % PLAYLIST.length);
+    if (selectedTrackRequest <= 0 || tracks.length === 0) return;
+    const normalized = (selectedTrackIndex + tracks.length) % tracks.length;
+    setTrackIndex(normalized);
     setCurrentTime(0);
-    void playSpotifyTrackByIndex(selectedTrackIndex);
-  }, [selectedTrackIndex, selectedTrackRequest, spotifyActive]);
+    setIsPlaying(true);
+    if (spotifyActive && spotifyStatus === "ready") {
+      void playSpotifyTrackByIndex(normalized);
+    }
+  }, [
+    selectedTrackIndex,
+    selectedTrackRequest,
+    spotifyActive,
+    spotifyStatus,
+    tracks.length,
+  ]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -821,15 +839,16 @@ export default function DynamicIsland({
 
   const advanceToNext = useCallback(
     (mode: "manual" | "manual_with_flip" | "auto") => {
+      if (tracks.length === 0) return;
       if (spotifyActive && spotifyStatus === "ready") {
         void playSpotifyTrackByIndex(trackIndex + 1);
         return;
       }
       if ((mode === "auto" || mode === "manual_with_flip") && !isAutoFlippingCover) {
-        const nextIndex = (trackIndex + 1) % PLAYLIST.length;
+        const nextIndex = (trackIndex + 1) % tracks.length;
         setFlipCoverPair({
-          front: PLAYLIST[trackIndex].albumCover,
-          back: PLAYLIST[nextIndex].albumCover,
+          front: tracks[trackIndex].albumCover,
+          back: tracks[nextIndex].albumCover,
         });
         setIsAutoFlippingCover(true);
         clearAutoFlipTimers();
@@ -845,11 +864,18 @@ export default function DynamicIsland({
         ];
         return;
       }
-      const nextIndex = (trackIndex + 1) % PLAYLIST.length;
+      const nextIndex = (trackIndex + 1) % tracks.length;
       setTrackIndex(nextIndex);
       setCurrentTime(0);
     },
-    [clearAutoFlipTimers, isAutoFlippingCover, spotifyActive, spotifyStatus, trackIndex]
+    [
+      clearAutoFlipTimers,
+      isAutoFlippingCover,
+      spotifyActive,
+      spotifyStatus,
+      trackIndex,
+      tracks,
+    ]
   );
 
   // Global mouse handlers for slider dragging
@@ -891,6 +917,7 @@ export default function DynamicIsland({
   ]);
 
   const goPrev = useCallback(() => {
+    if (tracks.length === 0) return;
     if (spotifyActive && spotifyStatus === "ready") {
       void playSpotifyTrackByIndex(trackIndex - 1);
       return;
@@ -899,11 +926,11 @@ export default function DynamicIsland({
     if (currentTime > 3) {
       setCurrentTime(0);
     } else {
-      const prevIndex = (trackIndex - 1 + PLAYLIST.length) % PLAYLIST.length;
+      const prevIndex = (trackIndex - 1 + tracks.length) % tracks.length;
       setTrackIndex(prevIndex);
       setCurrentTime(0);
     }
-  }, [currentTime, spotifyActive, spotifyStatus, trackIndex]);
+  }, [currentTime, spotifyActive, spotifyStatus, trackIndex, tracks.length]);
 
   const getAudioContext = useCallback(() => {
     if (audioCtxRef.current) return audioCtxRef.current;
@@ -1138,8 +1165,8 @@ export default function DynamicIsland({
   const playSpotifyTrackByIndex = useCallback(
     async (nextIndex: number, forceDeviceId?: string) => {
       const activeDeviceId = forceDeviceId ?? spotifyDeviceId;
-      if (!spotifyActive || !activeDeviceId) return;
-      const wrapped = (nextIndex + PLAYLIST.length) % PLAYLIST.length;
+      if (!spotifyActive || !activeDeviceId || tracks.length === 0) return;
+      const wrapped = (nextIndex + tracks.length) % tracks.length;
       queuedSpotifyTrackIndexRef.current = wrapped;
       if (spotifyPlayInFlightRef.current) return;
       spotifyPlayInFlightRef.current = true;
@@ -1148,7 +1175,7 @@ export default function DynamicIsland({
         while (queuedSpotifyTrackIndexRef.current !== null) {
           const targetIndex = queuedSpotifyTrackIndexRef.current;
           queuedSpotifyTrackIndexRef.current = null;
-          const trackId = extractTrackId(PLAYLIST[targetIndex].songLink);
+          const trackId = extractTrackId(tracks[targetIndex].songLink);
           if (!trackId) continue;
           if (connectLockedTrackIdRef.current) {
             connectLockedTrackIdRef.current = trackId;
@@ -1219,7 +1246,7 @@ export default function DynamicIsland({
         spotifyPlayInFlightRef.current = false;
       }
     },
-    [callSpotifyApi, ensureSpotifyDeviceActive, spotifyActive, spotifyDeviceId]
+    [callSpotifyApi, ensureSpotifyDeviceActive, spotifyActive, spotifyDeviceId, tracks]
   );
 
   const seekSpotifyTo = useCallback(
@@ -1414,7 +1441,7 @@ export default function DynamicIsland({
         const durationSec = Math.floor((state.duration ?? 0) / 1000);
         if (durationSec > 0) setSpotifyDurationSec(durationSec);
 
-        const foundIndex = PLAYLIST.findIndex(
+        const foundIndex = tracks.findIndex(
           (item) => extractTrackId(item.songLink) === uriTrackId
         );
         if (foundIndex >= 0) {
@@ -1437,10 +1464,6 @@ export default function DynamicIsland({
     playlistTrackIdSet,
     spotifyActive,
   ]);
-
-  const openCurrentTrack = useCallback(() => {
-    window.open(track.songLink, "_blank", "noopener,noreferrer");
-  }, [track.songLink]);
 
   const handleExpandedAlbumPointerMove = useCallback(
     (e: ReactMouseEvent<HTMLDivElement>) => {
@@ -2317,23 +2340,9 @@ export default function DynamicIsland({
                 className="inline-flex flex-col max-w-full"
                 whileHover={{ scale: 0.95, opacity: 0.8 }}
                 style={{
-                  cursor: "pointer",
+                  cursor: "default",
                   transformOrigin: artExpanded ? "center center" : "left center",
                 }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  openCurrentTrack();
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    openCurrentTrack();
-                  }
-                }}
-                role="button"
-                tabIndex={0}
-                aria-label={`Open ${track.title} by ${track.artist}`}
               >
                 <ScrollingText
                   key={`title-${track.title}`}
