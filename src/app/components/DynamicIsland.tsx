@@ -442,6 +442,8 @@ export default function DynamicIsland({
 
   const tracks = playlist.length > 0 ? playlist : SESSION_PLAYLIST;
   const [trackIndex, setTrackIndex] = useState(0);
+  const trackIndexRef = useRef(0);
+  const tracksRef = useRef<PlaylistTrack[]>(tracks);
   const track = tracks[trackIndex];
   const backgroundDrift = useMemo(
     () => createDriftKeyframes(trackIndex),
@@ -449,8 +451,20 @@ export default function DynamicIsland({
   );
 
   useEffect(() => {
+    tracksRef.current = tracks;
+  }, [tracks]);
+
+  useEffect(() => {
+    trackIndexRef.current = trackIndex;
+  }, [trackIndex]);
+
+  useEffect(() => {
     if (tracks.length === 0) return;
-    setTrackIndex((prev) => (prev + tracks.length) % tracks.length);
+    setTrackIndex((prev) => {
+      const normalized = (prev + tracks.length) % tracks.length;
+      trackIndexRef.current = normalized;
+      return normalized;
+    });
   }, [tracks.length]);
 
   const [isPlaying, setIsPlaying] = useState(false);
@@ -563,6 +577,9 @@ export default function DynamicIsland({
   const pendingSpotifyTrackTimerRef = useRef<number | null>(null);
   const spotifyPlayInFlightRef = useRef(false);
   const queuedSpotifyTrackIndexRef = useRef<number | null>(null);
+  const playSpotifyTrackByIndexRef = useRef<
+    (nextIndex: number, forceDeviceId?: string) => Promise<void>
+  >(async () => {});
   const spotifyCtaHoverLeaveTimerRef = useRef<number | null>(null);
   const spotifyPremiumAlertHoverLeaveTimerRef = useRef<number | null>(null);
   const spotifyActive = spotifyEnabled;
@@ -575,6 +592,11 @@ export default function DynamicIsland({
     });
     return set;
   }, [tracks]);
+  const playlistTrackIdSetRef = useRef(playlistTrackIdSet);
+
+  useEffect(() => {
+    playlistTrackIdSetRef.current = playlistTrackIdSet;
+  }, [playlistTrackIdSet]);
 
   const activeDurationSec = spotifyPlaybackReady
     ? Math.max(0, spotifyDurationSec)
@@ -814,6 +836,7 @@ export default function DynamicIsland({
   useEffect(() => {
     if (selectedTrackRequest <= 0 || tracks.length === 0) return;
     const normalized = (selectedTrackIndex + tracks.length) % tracks.length;
+    trackIndexRef.current = normalized;
     setTrackIndex(normalized);
     setCurrentTime(0);
     setIsPlaying(true);
@@ -841,20 +864,22 @@ export default function DynamicIsland({
   const advanceToNext = useCallback(
     (mode: "manual" | "manual_with_flip" | "auto") => {
       if (tracks.length === 0) return;
+      const currentIndex = (trackIndexRef.current + tracks.length) % tracks.length;
       if (spotifyPlaybackReady) {
-        void playSpotifyTrackByIndex(trackIndex + 1);
+        void playSpotifyTrackByIndexRef.current(currentIndex + 1);
         return;
       }
       if ((mode === "auto" || mode === "manual_with_flip") && !isAutoFlippingCover) {
-        const nextIndex = (trackIndex + 1) % tracks.length;
+        const nextIndex = (currentIndex + 1) % tracks.length;
         setFlipCoverPair({
-          front: tracks[trackIndex].albumCover,
+          front: tracks[currentIndex].albumCover,
           back: tracks[nextIndex].albumCover,
         });
         setIsAutoFlippingCover(true);
         clearAutoFlipTimers();
         autoFlipTimersRef.current = [
           window.setTimeout(() => {
+            trackIndexRef.current = nextIndex;
             setTrackIndex(nextIndex);
             setCurrentTime(0);
           }, COVER_FLIP_DURATION_MS / 2),
@@ -865,7 +890,8 @@ export default function DynamicIsland({
         ];
         return;
       }
-      const nextIndex = (trackIndex + 1) % tracks.length;
+      const nextIndex = (currentIndex + 1) % tracks.length;
+      trackIndexRef.current = nextIndex;
       setTrackIndex(nextIndex);
       setCurrentTime(0);
     },
@@ -873,26 +899,27 @@ export default function DynamicIsland({
       clearAutoFlipTimers,
       isAutoFlippingCover,
       spotifyPlaybackReady,
-      trackIndex,
       tracks,
     ]
   );
 
   const goPrev = useCallback(() => {
     if (tracks.length === 0) return;
+    const currentIndex = (trackIndexRef.current + tracks.length) % tracks.length;
     if (spotifyPlaybackReady) {
-      void playSpotifyTrackByIndex(trackIndex - 1);
+      void playSpotifyTrackByIndexRef.current(currentIndex - 1);
       return;
     }
     // If more than 3s in, restart current track; otherwise go to previous
     if (currentTime > 3) {
       setCurrentTime(0);
     } else {
-      const prevIndex = (trackIndex - 1 + tracks.length) % tracks.length;
+      const prevIndex = (currentIndex - 1 + tracks.length) % tracks.length;
+      trackIndexRef.current = prevIndex;
       setTrackIndex(prevIndex);
       setCurrentTime(0);
     }
-  }, [currentTime, spotifyPlaybackReady, trackIndex, tracks.length]);
+  }, [currentTime, spotifyPlaybackReady, tracks.length]);
 
   const getAudioContext = useCallback(() => {
     if (audioCtxRef.current) return audioCtxRef.current;
@@ -1127,17 +1154,22 @@ export default function DynamicIsland({
   const playSpotifyTrackByIndex = useCallback(
     async (nextIndex: number, forceDeviceId?: string) => {
       const activeDeviceId = forceDeviceId ?? spotifyDeviceId;
-      if (!spotifyActive || !activeDeviceId || tracks.length === 0) return;
-      const wrapped = (nextIndex + tracks.length) % tracks.length;
+      const activeTracks = tracksRef.current;
+      if (!spotifyActive || !activeDeviceId || activeTracks.length === 0) return;
+      const wrapped = (nextIndex + activeTracks.length) % activeTracks.length;
       queuedSpotifyTrackIndexRef.current = wrapped;
       if (spotifyPlayInFlightRef.current) return;
       spotifyPlayInFlightRef.current = true;
 
       try {
         while (queuedSpotifyTrackIndexRef.current !== null) {
-          const targetIndex = queuedSpotifyTrackIndexRef.current;
+          const requestedIndex = queuedSpotifyTrackIndexRef.current;
           queuedSpotifyTrackIndexRef.current = null;
-          const trackId = extractTrackId(tracks[targetIndex].songLink);
+          const latestTracks = tracksRef.current;
+          if (latestTracks.length === 0) continue;
+          const targetIndex =
+            (requestedIndex + latestTracks.length) % latestTracks.length;
+          const trackId = extractTrackId(latestTracks[targetIndex].songLink);
           if (!trackId) continue;
           if (connectLockedTrackIdRef.current) {
             connectLockedTrackIdRef.current = trackId;
@@ -1152,6 +1184,7 @@ export default function DynamicIsland({
             pendingSpotifyTrackTimerRef.current = null;
           }, 5000);
 
+          trackIndexRef.current = targetIndex;
           setTrackIndex(targetIndex);
           setCurrentTime(0);
           setIsPlaying(true);
@@ -1208,8 +1241,9 @@ export default function DynamicIsland({
         spotifyPlayInFlightRef.current = false;
       }
     },
-    [callSpotifyApi, ensureSpotifyDeviceActive, spotifyActive, spotifyDeviceId, tracks]
+    [callSpotifyApi, ensureSpotifyDeviceActive, spotifyActive, spotifyDeviceId]
   );
+  playSpotifyTrackByIndexRef.current = playSpotifyTrackByIndex;
 
   const seekSpotifyTo = useCallback(
     async (seconds: number) => {
@@ -1397,10 +1431,10 @@ export default function DynamicIsland({
           connectLockedTrackIdRef.current = null;
         }
 
-        if (spotifyActive && uriTrackId && !playlistTrackIdSet.has(uriTrackId)) {
+        if (spotifyActive && uriTrackId && !playlistTrackIdSetRef.current.has(uriTrackId)) {
           if (enforcingPlaylistRef.current) return;
           enforcingPlaylistRef.current = true;
-          void playSpotifyTrackByIndex(trackIndex).finally(() => {
+          void playSpotifyTrackByIndexRef.current(trackIndexRef.current).finally(() => {
             window.setTimeout(() => {
               enforcingPlaylistRef.current = false;
             }, 300);
@@ -1426,10 +1460,11 @@ export default function DynamicIsland({
         const durationSec = Math.floor((state.duration ?? 0) / 1000);
         if (durationSec > 0) setSpotifyDurationSec(durationSec);
 
-        const foundIndex = tracks.findIndex(
+        const foundIndex = tracksRef.current.findIndex(
           (item) => extractTrackId(item.songLink) === uriTrackId
         );
         if (foundIndex >= 0) {
+          trackIndexRef.current = foundIndex;
           setTrackIndex(foundIndex);
         }
       });
@@ -1446,7 +1481,6 @@ export default function DynamicIsland({
   }, [
     ensureSpotifyDeviceActive,
     loadSpotifyTrackAnalysis,
-    playlistTrackIdSet,
     spotifyActive,
   ]);
 
