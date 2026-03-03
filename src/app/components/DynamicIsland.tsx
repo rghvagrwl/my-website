@@ -533,6 +533,7 @@ export default function DynamicIsland({
   const sliderRef = useRef<HTMLDivElement>(null);
   const draggedToEndRef = useRef(false);
   const scrubbedTimeRef = useRef(0);
+  const scrubPointerIdRef = useRef<number | null>(null);
   const autoFlipTimersRef = useRef<number[]>([]);
   const introShimmerStartTimeoutRef = useRef<number | null>(null);
   const introShimmerEndTimeoutRef = useRef<number | null>(null);
@@ -565,6 +566,7 @@ export default function DynamicIsland({
   const spotifyCtaHoverLeaveTimerRef = useRef<number | null>(null);
   const spotifyPremiumAlertHoverLeaveTimerRef = useRef<number | null>(null);
   const spotifyActive = spotifyEnabled;
+  const spotifyPlaybackReady = spotifyEnabled && spotifyStatus === "ready";
   const playlistTrackIdSet = useMemo(() => {
     const set = new Set<string>();
     tracks.forEach((item) => {
@@ -574,18 +576,18 @@ export default function DynamicIsland({
     return set;
   }, [tracks]);
 
-  const activeDurationSec = spotifyEnabled
+  const activeDurationSec = spotifyPlaybackReady
     ? Math.max(0, spotifyDurationSec)
     : track.duration;
 
   useEffect(() => {
-    if (spotifyEnabled) return;
+    if (spotifyPlaybackReady) return;
     if (!isPlaying) return;
     const id = setInterval(() => {
       setCurrentTime((t) => (t >= activeDurationSec ? 0 : t + 1));
     }, 1000);
     return () => clearInterval(id);
-  }, [activeDurationSec, isPlaying, spotifyEnabled]);
+  }, [activeDurationSec, isPlaying, spotifyPlaybackReady]);
 
   useEffect(() => {
     scrubbedTimeRef.current = currentTime;
@@ -658,7 +660,7 @@ export default function DynamicIsland({
 
   useEffect(() => {
     const shouldAnimateBars =
-      spotifyEnabled && spotifyStatus === "ready" && isPlaying;
+      spotifyPlaybackReady && isPlaying;
     if (!shouldAnimateBars) {
       setVisualizerHeights((prev) =>
         prev.every((value) => value === 4) ? prev : PLAYING_HEIGHTS.map(() => 4)
@@ -746,7 +748,7 @@ export default function DynamicIsland({
     }, 62);
 
     return () => window.clearInterval(id);
-  }, [isPlaying, spotifyEnabled, spotifyStatus]);
+  }, [isPlaying, spotifyPlaybackReady]);
 
   useEffect(() => {
     return () => {
@@ -815,14 +817,13 @@ export default function DynamicIsland({
     setTrackIndex(normalized);
     setCurrentTime(0);
     setIsPlaying(true);
-    if (spotifyActive && spotifyStatus === "ready") {
+    if (spotifyPlaybackReady) {
       void playSpotifyTrackByIndex(normalized);
     }
   }, [
     selectedTrackIndex,
     selectedTrackRequest,
-    spotifyActive,
-    spotifyStatus,
+    spotifyPlaybackReady,
     tracks.length,
   ]);
 
@@ -840,7 +841,7 @@ export default function DynamicIsland({
   const advanceToNext = useCallback(
     (mode: "manual" | "manual_with_flip" | "auto") => {
       if (tracks.length === 0) return;
-      if (spotifyActive && spotifyStatus === "ready") {
+      if (spotifyPlaybackReady) {
         void playSpotifyTrackByIndex(trackIndex + 1);
         return;
       }
@@ -871,54 +872,15 @@ export default function DynamicIsland({
     [
       clearAutoFlipTimers,
       isAutoFlippingCover,
-      spotifyActive,
-      spotifyStatus,
+      spotifyPlaybackReady,
       trackIndex,
       tracks,
     ]
   );
 
-  // Global mouse handlers for slider dragging
-  useEffect(() => {
-    if (!isDragging) return;
-    const onMove = (e: MouseEvent) => scrubFromEvent(e.clientX);
-    const onUp = () => {
-      const shouldAdvance = draggedToEndRef.current;
-      const seekSeconds = scrubbedTimeRef.current;
-      setIsDragging(false);
-      setIsHoveringSlider(false);
-      setDragOverscroll(0);
-      suppressBackgroundCloseUntilRef.current = performance.now() + 250;
-      draggedToEndRef.current = false;
-      if (spotifyActive && spotifyStatus === "ready") {
-        if (shouldAdvance) {
-          advanceToNext("manual");
-          return;
-        }
-        void seekSpotifyTo(seekSeconds);
-        return;
-      }
-      if (shouldAdvance) {
-        advanceToNext("manual_with_flip");
-      }
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-  }, [
-    advanceToNext,
-    isDragging,
-    scrubFromEvent,
-    spotifyActive,
-    spotifyStatus,
-  ]);
-
   const goPrev = useCallback(() => {
     if (tracks.length === 0) return;
-    if (spotifyActive && spotifyStatus === "ready") {
+    if (spotifyPlaybackReady) {
       void playSpotifyTrackByIndex(trackIndex - 1);
       return;
     }
@@ -930,7 +892,7 @@ export default function DynamicIsland({
       setTrackIndex(prevIndex);
       setCurrentTime(0);
     }
-  }, [currentTime, spotifyActive, spotifyStatus, trackIndex, tracks.length]);
+  }, [currentTime, spotifyPlaybackReady, trackIndex, tracks.length]);
 
   const getAudioContext = useCallback(() => {
     if (audioCtxRef.current) return audioCtxRef.current;
@@ -1311,6 +1273,29 @@ export default function DynamicIsland({
     ]
   );
 
+  const finalizeScrub = useCallback(() => {
+    const shouldAdvance = draggedToEndRef.current;
+    const seekSeconds = scrubbedTimeRef.current;
+    setIsDragging(false);
+    setIsHoveringSlider(false);
+    setDragOverscroll(0);
+    suppressBackgroundCloseUntilRef.current = performance.now() + 250;
+    draggedToEndRef.current = false;
+
+    if (spotifyPlaybackReady) {
+      if (shouldAdvance) {
+        advanceToNext("manual");
+        return;
+      }
+      void seekSpotifyTo(seekSeconds);
+      return;
+    }
+
+    if (shouldAdvance) {
+      advanceToNext("manual_with_flip");
+    }
+  }, [advanceToNext, seekSpotifyTo, spotifyPlaybackReady]);
+
   const connectSpotifyPlayer = useCallback(async (preferActivation = false) => {
     if (!spotifyActive) return;
     if (!hasSpotifyConfig()) {
@@ -1541,7 +1526,7 @@ export default function DynamicIsland({
   }, []);
 
   const togglePlayPause = useCallback(() => {
-    if (spotifyActive && spotifyStatus === "ready" && spotifyPlayerRef.current) {
+    if (spotifyPlaybackReady && spotifyPlayerRef.current) {
       if (isPlaying) {
         void spotifyPlayerRef.current.pause();
       } else {
@@ -1560,8 +1545,7 @@ export default function DynamicIsland({
     isPlaying,
     playSpotifyTrackByIndex,
     playlistTrackIdSet,
-    spotifyActive,
-    spotifyStatus,
+    spotifyPlaybackReady,
     trackIndex,
   ]);
 
@@ -1614,7 +1598,7 @@ export default function DynamicIsland({
 
   // Auto-advance to next track when current one finishes
   useEffect(() => {
-    if (spotifyActive) return;
+    if (spotifyPlaybackReady) return;
     if (
       isPlaying &&
       !isDragging &&
@@ -1629,7 +1613,7 @@ export default function DynamicIsland({
     isAutoFlippingCover,
     isDragging,
     isPlaying,
-    spotifyActive,
+    spotifyPlaybackReady,
     track.duration,
   ]);
 
@@ -1645,7 +1629,7 @@ export default function DynamicIsland({
   const showSpotifyConnectCta = spotifyEnabled && spotifyStatus !== "ready";
   const spotifyCtaLabel = "Play with Spotify Premium";
   const spotifyCtaBusy = spotifyStatus === "connecting";
-  const shouldObscureSpotifyTime = spotifyEnabled && spotifyStatus !== "ready";
+  const shouldObscureSpotifyTime = spotifyStatus === "connecting";
   const currentTimeLabel = shouldObscureSpotifyTime ? "0:00" : formatTime(currentTime);
   const durationTimeLabel = shouldObscureSpotifyTime
     ? "0:00"
@@ -2426,10 +2410,35 @@ export default function DynamicIsland({
                 onMouseLeave={() => {
                   if (!isDragging) setIsHoveringSlider(false);
                 }}
-                onMouseDown={(e) => {
+                onPointerDown={(e) => {
+                  if (e.pointerType === "mouse" && e.button !== 0) return;
+                  e.preventDefault();
+                  scrubPointerIdRef.current = e.pointerId;
+                  e.currentTarget.setPointerCapture(e.pointerId);
                   setIsDragging(true);
+                  setIsHoveringSlider(true);
                   draggedToEndRef.current = false;
                   scrubFromEvent(e.clientX);
+                }}
+                onPointerMove={(e) => {
+                  if (!isDragging || scrubPointerIdRef.current !== e.pointerId) return;
+                  scrubFromEvent(e.clientX);
+                }}
+                onPointerUp={(e) => {
+                  if (scrubPointerIdRef.current !== e.pointerId) return;
+                  if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+                    e.currentTarget.releasePointerCapture(e.pointerId);
+                  }
+                  scrubPointerIdRef.current = null;
+                  finalizeScrub();
+                }}
+                onPointerCancel={(e) => {
+                  if (scrubPointerIdRef.current !== e.pointerId) return;
+                  if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+                    e.currentTarget.releasePointerCapture(e.pointerId);
+                  }
+                  scrubPointerIdRef.current = null;
+                  finalizeScrub();
                 }}
               >
                 <div

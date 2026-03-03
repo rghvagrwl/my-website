@@ -271,7 +271,7 @@ const MusicCard = memo(function MusicCard({
         }
         if (disableTrackLinks && onTrackSelect && playlistLength > 0) {
           e.preventDefault();
-          onTrackSelect(card.i);
+          onTrackSelect(card.i % playlistLength);
         }
       }}
     >
@@ -378,9 +378,9 @@ export default function MusicCanvas({
   const isMobile = viewportWidth < 768;
   const tracks = playlist.length > 0 ? playlist : SESSION_PLAYLIST;
   const layout = isMobile ? MOBILE : DESKTOP;
-  const columns = Math.max(1, Math.min(layout.columns, tracks.length));
-  const displayCount = tracks.length;
-  const rows = Math.max(1, Math.ceil(displayCount / columns));
+  const columns = Math.max(1, layout.columns);
+  const rows = Math.max(1, Math.ceil(tracks.length / columns));
+  const displayCount = rows * columns;
   const worldW = columns * layout.cellW;
   const worldH = rows * layout.cellH;
 
@@ -424,7 +424,7 @@ export default function MusicCanvas({
   const cardMeta: CardMeta[] = useMemo(
     () =>
       Array.from({ length: displayCount }, (_, i) => {
-        const track = tracks[i];
+        const track = tracks[i % tracks.length];
         const col = i % columns;
         const row = Math.floor(i / columns);
         const x = col * layout.cellW - worldW / 2 + layout.xOffset;
