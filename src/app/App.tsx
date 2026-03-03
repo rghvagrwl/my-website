@@ -346,7 +346,8 @@ export default function App() {
   const [musicTrackRequest, setMusicTrackRequest] = useState(0);
   const [musicEntryKey, setMusicEntryKey] = useState(0);
   const isMusicView = view === "music";
-  const showDynamicIsland = isMusicView;
+  const [hasEnteredMusic, setHasEnteredMusic] = useState(isMusicView);
+  const showDynamicIsland = hasEnteredMusic;
   const prevIsMusicViewRef = useRef(isMusicView);
   const openMenu = () => setMenuOpen(true);
   const closeMenu = () => setMenuOpen(false);
@@ -394,6 +395,11 @@ export default function App() {
       setMusicEntryKey((prev) => prev + 1);
     }
     prevIsMusicViewRef.current = isMusicView;
+  }, [isMusicView]);
+
+  useEffect(() => {
+    if (!isMusicView) return;
+    setHasEnteredMusic(true);
   }, [isMusicView]);
 
   useEffect(() => {
@@ -499,11 +505,21 @@ export default function App() {
         />
       ) : null}
       {showDynamicIsland ? (
-        <div className="fixed inset-0 z-[25] pointer-events-none">
+        <div
+          className="fixed inset-0 z-[25] pointer-events-none"
+          aria-hidden={!isMusicView}
+          style={{
+            opacity: isMusicView ? 1 : 0,
+            visibility: isMusicView ? "visible" : "hidden",
+            transition: isMusicView
+              ? "opacity 180ms ease, visibility 0s linear 0s"
+              : "opacity 180ms ease, visibility 0s linear 180ms",
+          }}
+        >
           <DynamicIsland
             entryKey={musicEntryKey}
             playlist={displayPlaylistTracks}
-            spotifyEnabled={isMusicView}
+            spotifyEnabled={hasEnteredMusic}
             selectedTrackIndex={musicSelectedTrackIndex}
             selectedTrackRequest={musicTrackRequest}
           />
