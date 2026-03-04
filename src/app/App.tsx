@@ -520,6 +520,7 @@ export default function App() {
             entryKey={musicEntryKey}
             playlist={displayPlaylistTracks}
             spotifyEnabled={hasEnteredMusic}
+            isActiveView={isMusicView}
             selectedTrackIndex={musicSelectedTrackIndex}
             selectedTrackRequest={musicTrackRequest}
           />

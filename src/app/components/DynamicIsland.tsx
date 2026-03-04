@@ -416,12 +416,14 @@ export default function DynamicIsland({
   entryKey = 0,
   playlist,
   spotifyEnabled = false,
+  isActiveView = true,
   selectedTrackIndex = 0,
   selectedTrackRequest = 0,
 }: {
   entryKey?: number;
   playlist: PlaylistTrack[];
   spotifyEnabled?: boolean;
+  isActiveView?: boolean;
   selectedTrackIndex?: number;
   selectedTrackRequest?: number;
 }) {
@@ -582,6 +584,7 @@ export default function DynamicIsland({
   >(async () => {});
   const spotifyCtaHoverLeaveTimerRef = useRef<number | null>(null);
   const spotifyPremiumAlertHoverLeaveTimerRef = useRef<number | null>(null);
+  const prevIsActiveViewRef = useRef(isActiveView);
   const spotifyActive = spotifyEnabled;
   const spotifyPlaybackReady = spotifyEnabled && spotifyStatus === "ready";
   const playlistTrackIdSet = useMemo(() => {
@@ -1583,6 +1586,52 @@ export default function DynamicIsland({
     trackIndex,
   ]);
 
+  useEffect(() => {
+    const wasActive = prevIsActiveViewRef.current;
+    if (wasActive && !isActiveView) {
+      if (spotifyPlayerRef.current) {
+        void spotifyPlayerRef.current.pause().catch(() => {
+          // Ignore pause errors when leaving the page.
+        });
+      }
+      setIsPlaying(false);
+      setIsDragging(false);
+      setIsHoveringSlider(false);
+      setIsHoveringPlaybackControls(false);
+      setDragOverscroll(0);
+      setArtExpanded(false);
+      draggedToEndRef.current = false;
+    }
+    prevIsActiveViewRef.current = isActiveView;
+  }, [isActiveView]);
+
+  useEffect(() => {
+    if (!isActiveView) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      if (event.repeat) return;
+      if (event.code !== "Space" && event.key !== " ") return;
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target) {
+        const tag = target.tagName;
+        if (
+          target.isContentEditable ||
+          tag === "INPUT" ||
+          tag === "TEXTAREA" ||
+          tag === "SELECT" ||
+          target.closest("button,a,[role='button']")
+        ) {
+          return;
+        }
+      }
+      event.preventDefault();
+      togglePlayPause();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isActiveView, togglePlayPause]);
+
   const disconnectSpotify = useCallback(() => {
     spotifyPlayerRef.current?.disconnect();
     spotifyPlayerRef.current = null;
@@ -2358,26 +2407,34 @@ export default function DynamicIsland({
                 className="inline-flex flex-col max-w-full"
                 whileHover={{ scale: 0.95, opacity: 0.8 }}
                 style={{
-                  cursor: "default",
+                  cursor: "pointer",
                   transformOrigin: artExpanded ? "center center" : "left center",
                 }}
               >
-                <ScrollingText
-                  key={`title-${track.title}`}
-                  className="text-white leading-[normal]"
-                  center={artExpanded}
-                  fullWidth={false}
+                <a
+                  href={track.songLink}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  style={{ cursor: "pointer" }}
                 >
-                  {track.title}
-                </ScrollingText>
-                <ScrollingText
-                  key={`artist-${track.artist}`}
-                  className="text-[rgba(255,255,255,0.6)] leading-[normal]"
-                  center={artExpanded}
-                  fullWidth={false}
-                >
-                  {track.artist}
-                </ScrollingText>
+                  <ScrollingText
+                    key={`title-${track.title}`}
+                    className="text-white leading-[normal]"
+                    center={artExpanded}
+                    fullWidth={false}
+                  >
+                    {track.title}
+                  </ScrollingText>
+                  <ScrollingText
+                    key={`artist-${track.artist}`}
+                    className="text-[rgba(255,255,255,0.6)] leading-[normal]"
+                    center={artExpanded}
+                    fullWidth={false}
+                  >
+                    {track.artist}
+                  </ScrollingText>
+                </a>
               </motion.div>
             </motion.div>
 
