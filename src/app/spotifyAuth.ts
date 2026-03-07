@@ -1,11 +1,22 @@
 const SPOTIFY_ACCOUNTS_BASE = "https://accounts.spotify.com";
-const TOKEN_KEY = "spotify-auth-tokens-v1";
-const STATE_KEY = "spotify-auth-state-v1";
-const VERIFIER_KEY = "spotify-auth-verifier-v1";
-const STATE_FALLBACK_KEY = "spotify-auth-state-fallback-v1";
-const VERIFIER_FALLBACK_KEY = "spotify-auth-verifier-fallback-v1";
+const AUTH_STORAGE_VERSION = "v2";
+const TOKEN_KEY = `spotify-auth-tokens-${AUTH_STORAGE_VERSION}`;
+const STATE_KEY = `spotify-auth-state-${AUTH_STORAGE_VERSION}`;
+const VERIFIER_KEY = `spotify-auth-verifier-${AUTH_STORAGE_VERSION}`;
+const STATE_FALLBACK_KEY = `spotify-auth-state-fallback-${AUTH_STORAGE_VERSION}`;
+const VERIFIER_FALLBACK_KEY = `spotify-auth-verifier-fallback-${AUTH_STORAGE_VERSION}`;
+const LEGACY_LOCAL_STORAGE_KEYS = [
+  "spotify-auth-tokens-v1",
+  "spotify-auth-state-fallback-v1",
+  "spotify-auth-verifier-fallback-v1",
+];
+const LEGACY_SESSION_STORAGE_KEYS = [
+  "spotify-auth-state-v1",
+  "spotify-auth-verifier-v1",
+];
 
 const EXPIRY_SAFETY_MS = 30_000;
+let hasPurgedLegacySpotifyStorage = false;
 
 export const SPOTIFY_SCOPES = [
   "streaming",
@@ -22,6 +33,18 @@ type StoredSpotifyTokens = {
   refreshToken: string;
   expiresAt: number;
 };
+
+function purgeLegacySpotifyStorage(): void {
+  if (typeof window === "undefined" || hasPurgedLegacySpotifyStorage) return;
+
+  LEGACY_LOCAL_STORAGE_KEYS.forEach((key) => {
+    window.localStorage.removeItem(key);
+  });
+  LEGACY_SESSION_STORAGE_KEYS.forEach((key) => {
+    window.sessionStorage.removeItem(key);
+  });
+  hasPurgedLegacySpotifyStorage = true;
+}
 
 function getClientId(): string {
   const clientId = import.meta.env.VITE_SPOTIFY_CLIENT_ID as string | undefined;
@@ -118,10 +141,12 @@ async function requestToken(params: URLSearchParams): Promise<TokenApiResponse> 
 }
 
 export function hasSpotifyConfig(): boolean {
+  purgeLegacySpotifyStorage();
   return getClientId().length > 0;
 }
 
 export function clearSpotifyAuth(): void {
+  purgeLegacySpotifyStorage();
   window.localStorage.removeItem(TOKEN_KEY);
   window.localStorage.removeItem(STATE_FALLBACK_KEY);
   window.localStorage.removeItem(VERIFIER_FALLBACK_KEY);
@@ -130,6 +155,7 @@ export function clearSpotifyAuth(): void {
 }
 
 export async function startSpotifyLogin(): Promise<void> {
+  purgeLegacySpotifyStorage();
   const clientId = getClientId();
   if (!clientId) throw new Error("Missing VITE_SPOTIFY_CLIENT_ID");
 
@@ -157,6 +183,7 @@ export async function startSpotifyLogin(): Promise<void> {
 }
 
 export async function completeSpotifyAuthFromUrl(): Promise<boolean> {
+  purgeLegacySpotifyStorage();
   const url = new URL(window.location.href);
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
@@ -215,6 +242,7 @@ export async function completeSpotifyAuthFromUrl(): Promise<boolean> {
 }
 
 export async function getValidSpotifyAccessToken(): Promise<string | null> {
+  purgeLegacySpotifyStorage();
   const tokens = loadTokens();
   if (!tokens) return null;
 

@@ -13,6 +13,7 @@ import svgPathsPlaying from "../../imports/svg-umafma3ph";
 import grainGif from "../../../Grain (1).gif";
 import { SESSION_PLAYLIST, type PlaylistTrack } from "../data/playlist";
 import {
+  clearSpotifyAuth,
   completeSpotifyAuthFromUrl,
   getValidSpotifyAccessToken,
   hasSpotifyConfig,
@@ -31,6 +32,7 @@ const INTRO_SHIMMER_DURATION_MS = 1250;
 const SPOTIFY_PREMIUM_REQUIRED_ERROR = "Spotify premium required";
 const SPOTIFY_PREMIUM_REQUIRED_ALERT =
   "Playback is unavailable without Spotify Premium";
+const SPOTIFY_DEVICE_UNAVAILABLE_ERROR = "Spotify device unavailable";
 
 type SpotifyPlaybackStatus =
   | "missing_config"
@@ -411,6 +413,46 @@ function isSpotifyPremiumRequiredMessage(message: string | null | undefined) {
   return normalized.includes("premium") || normalized.includes("premium_required");
 }
 
+function parseSpotifyApiMessage(raw: string): string {
+  const fallback = raw.trim();
+  if (!fallback) return "";
+  try {
+    const parsed = JSON.parse(raw) as
+      | {
+          message?: unknown;
+          error?: unknown;
+        }
+      | string;
+    if (typeof parsed === "string") return parsed.trim();
+    if (parsed && typeof parsed === "object") {
+      if (typeof parsed.message === "string") return parsed.message.trim();
+      if (typeof parsed.error === "string") return parsed.error.trim();
+      if (
+        parsed.error &&
+        typeof parsed.error === "object" &&
+        "message" in parsed.error &&
+        typeof (parsed.error as { message?: unknown }).message === "string"
+      ) {
+        return ((parsed.error as { message?: string }).message ?? "").trim();
+      }
+    }
+  } catch {
+    // Keep fallback for non-JSON payloads.
+  }
+  return fallback;
+}
+
+function isSpotifyDeviceUnavailableResponse(status: number, message: string): boolean {
+  if (status !== 404) return false;
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("device not found") ||
+    normalized.includes("device unavailable") ||
+    normalized.includes("no active device") ||
+    normalized.includes("player command failed")
+  );
+}
+
 /* ── Main component ─────────────────────────────────────────────── */
 export default function DynamicIsland({
   entryKey = 0,
@@ -581,6 +623,9 @@ export default function DynamicIsland({
   const queuedSpotifyTrackIndexRef = useRef<number | null>(null);
   const playSpotifyTrackByIndexRef = useRef<
     (nextIndex: number, forceDeviceId?: string) => Promise<void>
+  >(async () => {});
+  const connectSpotifyPlayerRef = useRef<
+    (preferActivation?: boolean, autoPlayTrackIndex?: number) => Promise<void>
   >(async () => {});
   const spotifyCtaHoverLeaveTimerRef = useRef<number | null>(null);
   const spotifyPremiumAlertHoverLeaveTimerRef = useRef<number | null>(null);
@@ -828,7 +873,7 @@ export default function DynamicIsland({
 
         const token = await getValidSpotifyAccessToken();
         if (!token) return;
-        await connectSpotifyPlayer();
+        await connectSpotifyPlayer(false, hasAuthParams ? trackIndexRef.current : undefined);
       } catch (error) {
         setSpotifyStatus("error");
         setSpotifyError((error as Error).message);
@@ -846,12 +891,7 @@ export default function DynamicIsland({
     if (spotifyPlaybackReady) {
       void playSpotifyTrackByIndex(normalized);
     }
-  }, [
-    selectedTrackIndex,
-    selectedTrackRequest,
-    spotifyPlaybackReady,
-    tracks.length,
-  ]);
+  }, [selectedTrackIndex, selectedTrackRequest, spotifyPlaybackReady, tracks.length]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -1055,17 +1095,30 @@ export default function DynamicIsland({
       });
       if (!response.ok && response.status !== 204) {
         const text = await response.text();
-        if (response.status === 404 && text.includes("Device not found")) {
-          throw new Error("Spotify device unavailable");
+        const message = parseSpotifyApiMessage(text);
+        if (isSpotifyDeviceUnavailableResponse(response.status, message)) {
+          throw new Error(SPOTIFY_DEVICE_UNAVAILABLE_ERROR);
         }
-        if (response.status === 403 && isSpotifyPremiumRequiredMessage(text)) {
+        if (response.status === 403 && isSpotifyPremiumRequiredMessage(message)) {
           throw new Error(SPOTIFY_PREMIUM_REQUIRED_ERROR);
         }
-        throw new Error(`Spotify API ${response.status}`);
+        throw new Error(
+          message ? `Spotify API ${response.status}: ${message}` : `Spotify API ${response.status}`
+        );
       }
     },
     []
   );
+
+  const activateSpotifyPlaybackElement = useCallback(async () => {
+    const player = spotifyPlayerRef.current;
+    if (!player?.activateElement) return;
+    try {
+      await player.activateElement();
+    } catch {
+      // Best-effort for autoplay policies.
+    }
+  }, []);
 
   const reactivateSpotifyDevice = useCallback(
     async (deviceId: string) => {
@@ -1192,6 +1245,12 @@ export default function DynamicIsland({
           setCurrentTime(0);
           setIsPlaying(true);
           setSpotifyDurationSec(0);
+          await activateSpotifyPlaybackElement();
+          try {
+            await ensureSpotifyDeviceActive(activeDeviceId, 6);
+          } catch {
+            // Keep going; the first play call also retries.
+          }
 
           let played = false;
           let unavailableRetries = 0;
@@ -1211,19 +1270,12 @@ export default function DynamicIsland({
                 setSpotifyError(SPOTIFY_PREMIUM_REQUIRED_ERROR);
                 break;
               }
-              if (message === "Spotify device unavailable" && activeDeviceId) {
-                if (unavailableRetries >= 3) {
-                  setSpotifyStatus("disconnected");
-                  setSpotifyDeviceId(null);
-                  pendingSpotifyTrackIdRef.current = null;
-                  if (pendingSpotifyTrackTimerRef.current !== null) {
-                    window.clearTimeout(pendingSpotifyTrackTimerRef.current);
-                    pendingSpotifyTrackTimerRef.current = null;
-                  }
-                  setSpotifyError(
-                    "Spotify device unavailable. Press Play with Spotify Premium to reconnect."
-                  );
+              if (message === SPOTIFY_DEVICE_UNAVAILABLE_ERROR && activeDeviceId) {
+                if (unavailableRetries >= 4) {
+                  setSpotifyStatus("connecting");
+                  setSpotifyError("Reconnecting Spotify player...");
                   queuedSpotifyTrackIndexRef.current = null;
+                  await connectSpotifyPlayerRef.current(true, targetIndex);
                   break;
                 }
                 unavailableRetries += 1;
@@ -1234,7 +1286,7 @@ export default function DynamicIsland({
                   // fall through to existing unavailable handling
                 }
               }
-              if (message === "Spotify device unavailable") break;
+              if (message === SPOTIFY_DEVICE_UNAVAILABLE_ERROR) break;
               setSpotifyError(message);
               break;
             }
@@ -1244,7 +1296,13 @@ export default function DynamicIsland({
         spotifyPlayInFlightRef.current = false;
       }
     },
-    [callSpotifyApi, ensureSpotifyDeviceActive, spotifyActive, spotifyDeviceId]
+    [
+      activateSpotifyPlaybackElement,
+      callSpotifyApi,
+      ensureSpotifyDeviceActive,
+      spotifyActive,
+      spotifyDeviceId,
+    ]
   );
   playSpotifyTrackByIndexRef.current = playSpotifyTrackByIndex;
 
@@ -1266,7 +1324,7 @@ export default function DynamicIsland({
             sought = true;
           } catch (error) {
             const message = (error as Error).message;
-            if (message === "Spotify device unavailable" && spotifyDeviceId) {
+            if (message === SPOTIFY_DEVICE_UNAVAILABLE_ERROR && spotifyDeviceId) {
               if (unavailableRetries >= 2) throw error;
               unavailableRetries += 1;
               try {
@@ -1286,11 +1344,11 @@ export default function DynamicIsland({
           setSpotifyError(SPOTIFY_PREMIUM_REQUIRED_ERROR);
           return;
         }
-        if (message === "Spotify device unavailable") {
+        if (message === SPOTIFY_DEVICE_UNAVAILABLE_ERROR) {
           setSpotifyStatus("disconnected");
           setSpotifyDeviceId(null);
           setSpotifyError(
-            "Spotify device unavailable. Press Play with Spotify Premium to reconnect."
+            `${SPOTIFY_DEVICE_UNAVAILABLE_ERROR}. Press Play with Spotify Premium to reconnect.`
           );
           return;
         }
@@ -1333,159 +1391,176 @@ export default function DynamicIsland({
     }
   }, [advanceToNext, seekSpotifyTo, spotifyPlaybackReady]);
 
-  const connectSpotifyPlayer = useCallback(async (preferActivation = false) => {
-    if (!spotifyActive) return;
-    if (!hasSpotifyConfig()) {
-      setSpotifyStatus("missing_config");
-      setSpotifyError("Add VITE_SPOTIFY_CLIENT_ID and VITE_SPOTIFY_REDIRECT_URI in .env.local");
-      return;
-    }
+  const connectSpotifyPlayer = useCallback(
+    async (preferActivation = false, autoPlayTrackIndex?: number) => {
+      if (!spotifyActive) return;
+      if (!hasSpotifyConfig()) {
+        setSpotifyStatus("missing_config");
+        setSpotifyError(
+          "Add VITE_SPOTIFY_CLIENT_ID and VITE_SPOTIFY_REDIRECT_URI in .env.local"
+        );
+        return;
+      }
 
-    try {
-      if (spotifyPlayerRef.current) {
-        spotifyPlayerRef.current.disconnect();
-        spotifyPlayerRef.current = null;
-      }
-      setSpotifyError(null);
-      setSpotifyPremiumAlertDismissed(false);
-      setSpotifyDeviceId(null);
-      setCurrentSpotifyTrackId(null);
-      setSpotifyDurationSec(0);
-      setIsPlaying(false);
-      connectLockedTrackIdRef.current = null;
-      if (pendingSpotifyTrackTimerRef.current !== null) {
-        window.clearTimeout(pendingSpotifyTrackTimerRef.current);
-        pendingSpotifyTrackTimerRef.current = null;
-      }
-      pendingSpotifyTrackIdRef.current = null;
-      spotifyPlayInFlightRef.current = false;
-      queuedSpotifyTrackIndexRef.current = null;
-      setSpotifyStatus("connecting");
-      const sdk = await loadSpotifySdk();
-      const player = new sdk.Player({
-        name: "Raghav New Music Player",
-        getOAuthToken: async (cb) => {
-          const token = await getValidSpotifyAccessToken();
-          cb(token ?? "");
-        },
-        volume: 0.7,
-      });
-      if (preferActivation) {
-        try {
-          await player.activateElement?.();
-        } catch {
-          // Best-effort for autoplay policies.
+      try {
+        if (spotifyPlayerRef.current) {
+          spotifyPlayerRef.current.disconnect();
+          spotifyPlayerRef.current = null;
         }
-      }
-
-      player.addListener("ready", async ({ device_id }: { device_id: string }) => {
-        setSpotifyDeviceId(device_id);
-        setCurrentSpotifyTrackId(null);
-        currentSpotifyTrackIdRef.current = null;
-        setSpotifyStatus("ready");
         setSpotifyError(null);
+        setSpotifyPremiumAlertDismissed(false);
+        setSpotifyDeviceId(null);
+        setCurrentSpotifyTrackId(null);
+        setSpotifyDurationSec(0);
+        setIsPlaying(false);
         connectLockedTrackIdRef.current = null;
-        try {
-          await ensureSpotifyDeviceActive(device_id, 6);
-        } catch {
-          // Keep silent; user can manually start playback.
+        if (pendingSpotifyTrackTimerRef.current !== null) {
+          window.clearTimeout(pendingSpotifyTrackTimerRef.current);
+          pendingSpotifyTrackTimerRef.current = null;
         }
-      });
-
-      player.addListener("authentication_error", ({ message }: { message: string }) => {
-        setSpotifyStatus("error");
-        setSpotifyError(message);
-      });
-      player.addListener("account_error", ({ message }: { message: string }) => {
-        setSpotifyStatus("error");
-        if (isSpotifyPremiumRequiredMessage(message)) {
-          setSpotifyError(SPOTIFY_PREMIUM_REQUIRED_ERROR);
-          return;
-        }
-        setSpotifyError(message);
-      });
-      player.addListener("playback_error", ({ message }: { message: string }) => {
-        setSpotifyStatus("error");
-        if (isSpotifyPremiumRequiredMessage(message)) {
-          setSpotifyError(SPOTIFY_PREMIUM_REQUIRED_ERROR);
-          return;
-        }
-        setSpotifyError(message);
-      });
-      player.addListener("player_state_changed", (state: any) => {
-        if (!state) return;
-        const uri: string | undefined = state.track_window?.current_track?.uri;
-        if (!uri) return;
-        const uriTrackId = uri.split(":")[2];
-        setCurrentSpotifyTrackId(uriTrackId ?? null);
-        currentSpotifyTrackIdRef.current = uriTrackId ?? null;
-        spotifyPositionSecRef.current = Math.max(0, (state.position ?? 0) / 1000);
-        spotifyPositionTsRef.current = performance.now();
-        if (uriTrackId) {
-          void loadSpotifyTrackAnalysis(uriTrackId);
+        pendingSpotifyTrackIdRef.current = null;
+        spotifyPlayInFlightRef.current = false;
+        queuedSpotifyTrackIndexRef.current = null;
+        setSpotifyStatus("connecting");
+        const sdk = await loadSpotifySdk();
+        const player = new sdk.Player({
+          name: "Raghav New Music Player",
+          getOAuthToken: async (cb) => {
+            const token = await getValidSpotifyAccessToken();
+            cb(token ?? "");
+          },
+          volume: 0.7,
+        });
+        if (preferActivation) {
+          try {
+            await player.activateElement?.();
+          } catch {
+            // Best-effort for autoplay policies.
+          }
         }
 
-        const connectLockTrackId = connectLockedTrackIdRef.current;
-        if (connectLockTrackId) {
-          if (uriTrackId !== connectLockTrackId) {
-            // Ignore transient SDK states during connect handoff.
+        player.addListener("ready", async ({ device_id }: { device_id: string }) => {
+          setSpotifyDeviceId(device_id);
+          setCurrentSpotifyTrackId(null);
+          currentSpotifyTrackIdRef.current = null;
+          setSpotifyStatus("ready");
+          setSpotifyError(null);
+          connectLockedTrackIdRef.current = null;
+          try {
+            await ensureSpotifyDeviceActive(device_id, 6);
+          } catch {
+            // Keep silent; user can manually start playback.
+          }
+          if (typeof autoPlayTrackIndex === "number" && tracksRef.current.length > 0) {
+            void playSpotifyTrackByIndexRef.current(autoPlayTrackIndex, device_id);
+          }
+        });
+
+        player.addListener("authentication_error", ({ message }: { message: string }) => {
+          setSpotifyStatus("error");
+          setSpotifyError(message);
+        });
+        player.addListener("initialization_error", ({ message }: { message: string }) => {
+          setSpotifyStatus("error");
+          setSpotifyError(message);
+        });
+        player.addListener("account_error", ({ message }: { message: string }) => {
+          setSpotifyStatus("error");
+          if (isSpotifyPremiumRequiredMessage(message)) {
+            setSpotifyError(SPOTIFY_PREMIUM_REQUIRED_ERROR);
             return;
           }
-          connectLockedTrackIdRef.current = null;
-        }
-
-        if (spotifyActive && uriTrackId && !playlistTrackIdSetRef.current.has(uriTrackId)) {
-          if (enforcingPlaylistRef.current) return;
-          enforcingPlaylistRef.current = true;
-          void playSpotifyTrackByIndexRef.current(trackIndexRef.current).finally(() => {
-            window.setTimeout(() => {
-              enforcingPlaylistRef.current = false;
-            }, 300);
-          });
-          return;
-        }
-
-        const pendingTrackId = pendingSpotifyTrackIdRef.current;
-        if (pendingTrackId && uriTrackId !== pendingTrackId) {
-          // Ignore stale state updates while waiting for requested track to load.
-          return;
-        }
-        if (pendingTrackId && uriTrackId === pendingTrackId) {
-          pendingSpotifyTrackIdRef.current = null;
-          if (pendingSpotifyTrackTimerRef.current !== null) {
-            window.clearTimeout(pendingSpotifyTrackTimerRef.current);
-            pendingSpotifyTrackTimerRef.current = null;
+          setSpotifyError(message);
+        });
+        player.addListener("playback_error", ({ message }: { message: string }) => {
+          setSpotifyStatus("error");
+          if (isSpotifyPremiumRequiredMessage(message)) {
+            setSpotifyError(SPOTIFY_PREMIUM_REQUIRED_ERROR);
+            return;
           }
+          setSpotifyError(message);
+        });
+        player.addListener("not_ready", ({ device_id }: { device_id: string }) => {
+          setSpotifyStatus("disconnected");
+          setSpotifyError(`${SPOTIFY_DEVICE_UNAVAILABLE_ERROR}. Reconnect and try again.`);
+          setSpotifyDeviceId((prev) => (prev === device_id ? null : prev));
+        });
+        player.addListener("autoplay_failed", () => {
+          setSpotifyError("Autoplay blocked by browser policy. Press play again.");
+        });
+        player.addListener("player_state_changed", (state: any) => {
+          if (!state) return;
+          const uri: string | undefined = state.track_window?.current_track?.uri;
+          if (!uri) return;
+          const uriTrackId = uri.split(":")[2];
+          setCurrentSpotifyTrackId(uriTrackId ?? null);
+          currentSpotifyTrackIdRef.current = uriTrackId ?? null;
+          spotifyPositionSecRef.current = Math.max(0, (state.position ?? 0) / 1000);
+          spotifyPositionTsRef.current = performance.now();
+          if (uriTrackId) {
+            void loadSpotifyTrackAnalysis(uriTrackId);
+          }
+
+          const connectLockTrackId = connectLockedTrackIdRef.current;
+          if (connectLockTrackId) {
+            if (uriTrackId !== connectLockTrackId) {
+              // Ignore transient SDK states during connect handoff.
+              return;
+            }
+            connectLockedTrackIdRef.current = null;
+          }
+
+          if (spotifyActive && uriTrackId && !playlistTrackIdSetRef.current.has(uriTrackId)) {
+            if (enforcingPlaylistRef.current) return;
+            enforcingPlaylistRef.current = true;
+            void playSpotifyTrackByIndexRef.current(trackIndexRef.current).finally(() => {
+              window.setTimeout(() => {
+                enforcingPlaylistRef.current = false;
+              }, 300);
+            });
+            return;
+          }
+
+          const pendingTrackId = pendingSpotifyTrackIdRef.current;
+          if (pendingTrackId && uriTrackId !== pendingTrackId) {
+            // Ignore stale state updates while waiting for requested track to load.
+            return;
+          }
+          if (pendingTrackId && uriTrackId === pendingTrackId) {
+            pendingSpotifyTrackIdRef.current = null;
+            if (pendingSpotifyTrackTimerRef.current !== null) {
+              window.clearTimeout(pendingSpotifyTrackTimerRef.current);
+              pendingSpotifyTrackTimerRef.current = null;
+            }
+          }
+
+          setIsPlaying(!state.paused);
+          setCurrentTime(Math.floor((state.position ?? 0) / 1000));
+          const durationSec = Math.floor((state.duration ?? 0) / 1000);
+          if (durationSec > 0) setSpotifyDurationSec(durationSec);
+
+          const foundIndex = tracksRef.current.findIndex(
+            (item) => extractTrackId(item.songLink) === uriTrackId
+          );
+          if (foundIndex >= 0) {
+            trackIndexRef.current = foundIndex;
+            setTrackIndex(foundIndex);
+          }
+        });
+
+        const connected = await player.connect();
+        if (!connected) {
+          throw new Error("Spotify player failed to connect");
         }
-
-        setIsPlaying(!state.paused);
-        setCurrentTime(Math.floor((state.position ?? 0) / 1000));
-        const durationSec = Math.floor((state.duration ?? 0) / 1000);
-        if (durationSec > 0) setSpotifyDurationSec(durationSec);
-
-        const foundIndex = tracksRef.current.findIndex(
-          (item) => extractTrackId(item.songLink) === uriTrackId
-        );
-        if (foundIndex >= 0) {
-          trackIndexRef.current = foundIndex;
-          setTrackIndex(foundIndex);
-        }
-      });
-
-      const connected = await player.connect();
-      if (!connected) {
-        throw new Error("Spotify player failed to connect");
+        spotifyPlayerRef.current = player;
+      } catch (error) {
+        setSpotifyStatus("error");
+        setSpotifyError((error as Error).message);
       }
-      spotifyPlayerRef.current = player;
-    } catch (error) {
-      setSpotifyStatus("error");
-      setSpotifyError((error as Error).message);
-    }
-  }, [
-    ensureSpotifyDeviceActive,
-    loadSpotifyTrackAnalysis,
-    spotifyActive,
-  ]);
+    },
+    [ensureSpotifyDeviceActive, loadSpotifyTrackAnalysis, spotifyActive]
+  );
+  connectSpotifyPlayerRef.current = connectSpotifyPlayer;
 
   const handleExpandedAlbumPointerMove = useCallback(
     (e: ReactMouseEvent<HTMLDivElement>) => {
@@ -1571,13 +1646,17 @@ export default function DynamicIsland({
           void playSpotifyTrackByIndex(trackIndex);
           return;
         }
-        void spotifyPlayerRef.current.resume();
+        void (async () => {
+          await activateSpotifyPlaybackElement();
+          await spotifyPlayerRef.current?.resume();
+        })();
       }
       setIsPlaying((prev) => !prev);
       return;
     }
     setIsPlaying((prev) => !prev);
   }, [
+    activateSpotifyPlaybackElement,
     currentSpotifyTrackId,
     isPlaying,
     playSpotifyTrackByIndex,
@@ -1710,7 +1789,10 @@ export default function DynamicIsland({
     isHoveringPlaybackControls ||
     (spotifyEnabled && spotifyStatus !== "ready");
   const showSpotifyConnectCta = spotifyEnabled && spotifyStatus !== "ready";
-  const spotifyCtaLabel = "Play with Spotify Premium";
+  const shouldOfferSpotifyAccountSwitch = isSpotifyPremiumRequiredMessage(spotifyError);
+  const spotifyCtaLabel = shouldOfferSpotifyAccountSwitch
+    ? "Switch Spotify Account"
+    : "Play with Spotify Premium";
   const spotifyCtaBusy = spotifyStatus === "connecting";
   const shouldObscureSpotifyTime = spotifyStatus === "connecting";
   const currentTimeLabel = shouldObscureSpotifyTime ? "0:00" : formatTime(currentTime);
@@ -1721,6 +1803,12 @@ export default function DynamicIsland({
   const albumSize = Math.max(236, Math.min(320, playerWidth - 12));
   const playerIntroStartOffset = Math.max(420, Math.floor(viewportHeight * 0.68));
   const showSpotifyPremiumAlert = isSpotifyPremiumRequiredMessage(spotifyError);
+  const showSpotifyErrorAlert =
+    spotifyActive &&
+    Boolean(spotifyError) &&
+    !showSpotifyPremiumAlert &&
+    spotifyStatus !== "connecting";
+  const spotifyErrorAlertMessage = spotifyError ?? "";
   const sliderStretch = isDragging
     ? {
         widthOffset: Math.abs(dragOverscroll) * 30,
@@ -1789,9 +1877,15 @@ export default function DynamicIsland({
         }
         void (async () => {
           try {
+            if (shouldOfferSpotifyAccountSwitch) {
+              disconnectSpotify();
+              clearSpotifyAuth();
+              await startSpotifyLogin();
+              return;
+            }
             const token = await getValidSpotifyAccessToken();
             if (token) {
-              await connectSpotifyPlayer(true);
+              await connectSpotifyPlayer(true, trackIndexRef.current);
               return;
             }
             await startSpotifyLogin();
@@ -2126,6 +2220,49 @@ export default function DynamicIsland({
         </AnimatePresence>
 
         <AnimatePresence initial={false}>
+          {showSpotifyErrorAlert ? (
+            <motion.div
+              className="relative z-20 mb-2 inline-flex max-w-[calc(100vw-48px)] cursor-pointer items-center gap-[8px] overflow-hidden rounded-full px-[10px] py-[6px] text-[12px] font-medium text-[rgba(255,182,182,0.96)]"
+              initial={{ opacity: 0, y: 8, scale: 0.97 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -6, scale: 0.98 }}
+              transition={{ duration: 0.2, ease: [0.22, 0.8, 0.26, 1] }}
+              style={{
+                backgroundColor: "rgba(40,40,40,0.45)",
+                backgroundImage:
+                  "linear-gradient(180deg, rgba(164,56,56,0.52) 0%, rgba(120,34,34,0.34) 52%, rgba(44,20,20,0.2) 100%)",
+                backdropFilter: "blur(40px) saturate(1.8)",
+                WebkitBackdropFilter: "blur(40px) saturate(1.8)",
+                border: "1px solid rgba(255,182,182,0.28)",
+                boxShadow:
+                  "0 8px 24px rgba(0,0,0,0.22), inset 0 0.5px 0 rgba(255,255,255,0.1)",
+                pointerEvents: "auto",
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                setSpotifyError(null);
+              }}
+              title="Tap to dismiss"
+            >
+              <svg
+                width="24"
+                height="24"
+                viewBox="0 0 24 24"
+                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
+                className="h-[16px] w-[16px] shrink-0"
+                aria-hidden="true"
+              >
+                <path
+                  fillRule="evenodd"
+                  clipRule="evenodd"
+                  d="M12 2C17.5228 2 22 6.47715 22 12C22 17.5228 17.5228 22 12 22C6.47715 22 2 17.5228 2 12C2 6.47715 6.47715 2 12 2ZM12 7C11.4477 7 11 7.44772 11 8V12C11 12.5523 11.4477 13 12 13C12.5523 13 13 12.5523 13 12V8C13 7.44772 12.5523 7 12 7ZM12 16C11.4477 16 11 16.4477 11 17C11 17.5523 11.4477 18 12 18C12.5523 18 13 17.5523 13 17C13 16.4477 12.5523 16 12 16Z"
+                  fill="currentColor"
+                />
+              </svg>
+              <span className="truncate">{spotifyErrorAlertMessage}</span>
+            </motion.div>
+          ) : null}
           {spotifyActive && showSpotifyPremiumAlert && !spotifyPremiumAlertDismissed ? (
             <motion.div
               className="relative z-20 mb-2 inline-flex w-fit cursor-pointer items-center gap-[8px] overflow-visible rounded-full px-[10px] py-[6px] text-[12px] font-medium text-[rgba(255,208,98,0.98)]"
